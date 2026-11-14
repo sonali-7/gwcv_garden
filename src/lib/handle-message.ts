@@ -344,8 +344,26 @@ async function commit(
     const existing = plantings.find(
       (item) => item.bed_id === bed.id && item.crop.toLowerCase() === crop.toLowerCase() && isActive(item, interval.day),
     );
+    const planned = plantings.find(
+      (item) =>
+        item.bed_id === bed.id &&
+        item.crop.toLowerCase() === crop.toLowerCase() &&
+        item.planted_date > interval.day &&
+        !item.removed_date &&
+        !item.source_session_id,
+    );
     if (existing) {
       plantingId = existing.id;
+    } else if (planned) {
+      // Someone planted what the garden view had planned: the plan becomes the real planting.
+      await store.updatePlanting({
+        ...planned,
+        planted_date: interval.day,
+        expected_harvest_date: addDays(interval.day, planned.days_to_maturity),
+        season_year: Number(interval.day.slice(0, 4)),
+        source_session_id: session.id,
+      });
+      plantingId = planned.id;
     } else {
       const days = maturityDays(crop);
       const created: Planting = {

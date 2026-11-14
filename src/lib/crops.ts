@@ -24,6 +24,15 @@ const MATURITY_DAYS: Record<string, number> = {
   corn: 80,
   trees: 365,
   tree: 365,
+  garlic: 240,
+  onion: 100,
+  spinach: 40,
+  beet: 60,
+  broccoli: 70,
+  pepper: 75,
+  potato: 90,
+  clover: 60,
+  "winter rye": 180,
 };
 
 const CANONICAL: Record<string, string> = {
@@ -41,6 +50,20 @@ const CANONICAL: Record<string, string> = {
   peas: "peas",
   lettuce: "lettuce",
   corn: "corn",
+  garlic: "garlic",
+  onion: "onion",
+  onions: "onion",
+  spinach: "spinach",
+  beet: "beet",
+  beets: "beet",
+  broccoli: "broccoli",
+  pepper: "pepper",
+  peppers: "pepper",
+  potato: "potato",
+  potatoes: "potato",
+  clover: "clover",
+  "winter rye": "winter rye",
+  rye: "winter rye",
 };
 
 export function canonicalCrop(crop: string): string {

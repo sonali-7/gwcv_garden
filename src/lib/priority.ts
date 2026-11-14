@@ -72,6 +72,10 @@ export function buildTasks(input: {
 
   for (const bed of input.beds) {
     if (active.some((planting) => planting.bed_id === bed.id)) continue;
+    const planned = input.plantings.find(
+      (planting) => planting.bed_id === bed.id && planting.planted_date > today && !planting.removed_date,
+    );
+    if (planned) continue;
     tasks.push({
       id: `fill:${bed.id}`,
       type: "fill",
