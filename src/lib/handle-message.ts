@@ -1,20 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { interpretMessage } from "./agent";
 import { maturityDays } from "./crops";
-import { matchLocation } from "./location";
+import { isMultiAccept, matchLocation } from "./location";
 import { activePlantings, isActive } from "./plantings";
 import { planPhrase, sentence, workPhrase } from "./phrases";
 import {
   applyClarification,
   cleanName,
   EMERGENCY_REPLY,
+  helpForTimeField,
   isEmergency,
+  isHelpRequest,
   parseDraft,
   parseMessage,
   finishDraft,
   needsDay,
   questionFor,
   resolveStoredDate,
+  rowOptionsReply,
+  rowQuestion,
   timeGaps,
 } from "./parse";
 import { buildTasks } from "./priority";
@@ -39,6 +43,7 @@ import type {
   Person,
   Planting,
   SessionDraft,
+  TextMemory,
   ThreadMessage,
   WorkSession,
 } from "./types";
@@ -173,14 +178,18 @@ async function processText(
   const beds = await store.listBeds();
   const plantings = await store.listPlantings();
   const day = todayYmd(now, person.timezone);
+  const conversation = await store.getConversation(person.phone);
   const parsed = await interpretMessage(text, {
     today: day,
     timezone: person.timezone,
     beds: beds.map((bed) => bed.name),
     crops: activePlantings(plantings, day).map((planting) => planting.crop),
+    memory: conversation.memory ?? null,
   });
   if (parsed.kind === "undo") return undo(store, person, now, say);
-  if (parsed.kind === "cancel") return cancelPlans(store, person, parsed.instruction, now, say);
+  if (parsed.kind === "cancel") {
+    return cancelPlans(store, person, parsed.instruction, parsed.includePast, now, say);
+  }
   if (parsed.kind === "query_schedule") {
     await say(await scheduleText(store, now, person.timezone));
     if (image) await persistPhoto(store, person.id, image, null, now);
@@ -214,16 +223,16 @@ async function answerPending(
   const held = image ?? pending.image;
 
   if (pending.kind === "time") {
+    if (isHelpRequest(text)) {
+      await say(helpForTimeField(pending.field));
+      return null;
+    }
     const applied = applyClarification(pending.draft, pending.field, text, todayYmd(now, person.timezone));
     if (!applied) {
       const tries = pending.tries + 1;
       if (tries >= 2) {
         await store.saveConversation(person.phone, { ...conversation, pending: null });
-        await say(
-          pending.field === "day"
-            ? 'Send the day, like "November 19".'
-            : 'Send it again with a time, like "from 8–9am".',
-        );
+        await say(helpForTimeField(pending.field));
         return null;
       }
       await store.saveConversation(person.phone, {
@@ -238,29 +247,44 @@ async function answerPending(
 
   const beds = await store.listBeds();
   const plantings = await store.listPlantings();
+  const bedNames = beds.filter((bed) => !bed.archived).map((bed) => bed.name);
+  if (isHelpRequest(text)) {
+    await say(rowOptionsReply(pending.choices ?? [], bedNames));
+    return null;
+  }
   const day = resolveDay(pending.draft, now, person.timezone);
-  const loc = matchLocation(text, beds, plantings, day);
-  if (!loc.bed) {
+  const choices = pending.choices?.length ? pending.choices : undefined;
+  const loc = matchLocation(text, beds, plantings, day, { choices });
+  const targets =
+    loc.beds.length > 0
+      ? loc.beds
+      : isMultiAccept(text) && choices?.length
+        ? beds.filter((bed) => choices.some((name) => name === bed.name))
+        : loc.bed
+          ? [loc.bed]
+          : [];
+  if (targets.length === 0) {
     const tries = pending.tries + 1;
     if (tries >= 2) {
       return commit(store, person, pending.draft, null, null, held, now, say, true);
     }
+    const nextChoices = loc.choices.length ? loc.choices : pending.choices;
     await store.saveConversation(person.phone, {
       ...conversation,
-      pending: { ...pending, tries, image: held },
+      pending: { ...pending, tries, image: held, choices: nextChoices },
     });
-    await say(loc.ambiguous ? `Which row — ${loc.choices.join(" or ")}?` : "Which row?");
+    await say(rowQuestion(nextChoices, bedNames));
     return null;
   }
-  return commit(store, person, pending.draft, loc.bed, loc.planting, held, now, say, false);
+  return commitBeds(store, person, pending.draft, targets, plantings, held, now, say, day);
 }
 
 function locationText(draft: SessionDraft): string {
   const lower = draft.sourceText.toLowerCase();
-  const extra = [draft.place, draft.crop].filter(
+  const extras = [...(draft.places ?? []), draft.place, draft.crop].filter(
     (value): value is string => Boolean(value) && !lower.includes(value!.toLowerCase()),
   );
-  return [draft.sourceText, ...extra].join(" ");
+  return [draft.sourceText, ...extras].join(" ");
 }
 
 async function continueDraft(
@@ -300,50 +324,187 @@ async function continueDraft(
   const plantings = await store.listPlantings();
   const loc = matchLocation(locationText(ready), beds, plantings, first.day);
   const activity = ready.activity ?? "other";
-  if (!loc.bed && needsRow(activity)) {
+  const targets = loc.beds.length ? loc.beds : loc.bed ? [loc.bed] : [];
+  if (targets.length === 0 && needsRow(activity)) {
+    const bedNames = beds.filter((bed) => !bed.archived).map((bed) => bed.name);
     await store.saveConversation(person.phone, {
       ...(await store.getConversation(person.phone)),
       pending: { kind: "row", draft: ready, image, tries: 0, choices: loc.choices },
     });
-    await say(loc.ambiguous ? `Which row — ${loc.choices.join(" or ")}?` : "Which row?");
+    await say(rowQuestion(loc.choices, bedNames));
     return null;
   }
 
-  if (occurrences.length === 1) {
-    return commit(store, person, occurrences[0], loc.bed, loc.planting, image, now, say, false);
+  if (occurrences.length === 1 && targets.length <= 1) {
+    return commit(store, person, occurrences[0], targets[0] ?? null, loc.planting, image, now, say, false);
   }
 
   const created: WorkSession[] = [];
-  for (const [index, occurrence] of occurrences.entries()) {
-    const session = await commit(
-      store,
-      person,
-      occurrence,
-      loc.bed,
-      loc.planting,
-      index === 0 ? image : null,
-      now,
-      async () => undefined,
-      false,
-    );
-    if (session) created.push(session);
+  let photoUsed = false;
+  for (const occurrence of occurrences) {
+    for (const bed of targets.length ? targets : [null]) {
+      const planting =
+        bed && loc.planting?.bed_id === bed.id
+          ? loc.planting
+          : bed
+            ? matchLocation(locationText(ready), [bed], plantings, first.day).planting
+            : null;
+      const session = await commit(
+        store,
+        person,
+        occurrence,
+        bed,
+        planting,
+        !photoUsed ? image : null,
+        now,
+        async () => undefined,
+        false,
+      );
+      if (session) {
+        created.push(session);
+        photoUsed = true;
+      }
+    }
   }
   if (created.length === 0) {
     await say("I couldn't schedule those.");
     return null;
   }
+  return finishBatch(store, person, ready, created, targets, now, say);
+}
+
+async function commitBeds(
+  store: Store,
+  person: Person,
+  draft: SessionDraft,
+  targets: Bed[],
+  plantings: Planting[],
+  image: IncomingImage | null,
+  now: Date,
+  say: (line: string) => Promise<void>,
+  day: string,
+): Promise<WorkSession | null> {
+  if (targets.length === 1) {
+    const planting = matchLocation(locationText(draft), targets, plantings, day).planting;
+    return commit(store, person, draft, targets[0], planting, image, now, say, false);
+  }
+  const created: WorkSession[] = [];
+  let photoUsed = false;
+  for (const bed of targets) {
+    const planting = matchLocation(locationText(draft), [bed], plantings, day).planting;
+    const session = await commit(
+      store,
+      person,
+      draft,
+      bed,
+      planting,
+      !photoUsed ? image : null,
+      now,
+      async () => undefined,
+      false,
+    );
+    if (session) {
+      created.push(session);
+      photoUsed = true;
+    }
+  }
+  if (created.length === 0) {
+    await say("I couldn't log those rows.");
+    return null;
+  }
+  return finishBatch(store, person, draft, created, targets, now, say);
+}
+
+async function finishBatch(
+  store: Store,
+  person: Person,
+  draft: SessionDraft,
+  created: WorkSession[],
+  beds: Bed[],
+  now: Date,
+  say: (line: string) => Promise<void>,
+): Promise<WorkSession | null> {
+  const activity = draft.activity ?? "other";
   const planned = created.some((session) => new Date(session.start).getTime() > now.getTime());
   const label = planned ? "Scheduled" : "Logged";
-  const phrase = planned
-    ? planPhrase(activity, ready.crop, loc.bed?.name ?? null)
-    : workPhrase(activity, ready.crop, loc.bed?.name ?? null);
-  await say(`${label}: ${person.name}, ${seriesWhen(created, now, person.timezone, ready.recurringWeeks)}, ${phrase}${ready.recurringWeeks > 1 ? ` (${ready.recurringWeeks} weeks)` : ""}.`);
+  const phrase =
+    beds.length > 1
+      ? multiBedPhrase(activity, beds.map((bed) => bed.name), planned)
+      : planned
+        ? planPhrase(activity, draft.crop, beds[0]?.name ?? null)
+        : workPhrase(activity, draft.crop, beds[0]?.name ?? null);
+  const previous = await store.getConversation(person.phone);
+  const memory = memoryFromDraft(draft, beds, created[0] ?? null, now);
+  await store.saveConversation(person.phone, {
+    ...previous,
+    pending: null,
+    lastSessionId: created[created.length - 1]?.id ?? null,
+    lastSessionIds: created.map((session) => session.id),
+    memory,
+  });
+  await say(
+    `${label}: ${person.name}, ${seriesWhen(created, now, person.timezone, draft.recurringWeeks)}, ${phrase}${draft.recurringWeeks > 1 ? ` (${draft.recurringWeeks} weeks)` : ""}.`,
+  );
   return created[0] ?? null;
+}
+
+function memoryFromDraft(
+  draft: SessionDraft,
+  beds: Bed[],
+  session: WorkSession | null,
+  now: Date,
+): TextMemory {
+  const bedNames = beds.map((bed) => bed.name);
+  const activity = draft.activity ?? session?.activity_type ?? "other";
+  const where = bedNames.length ? ` on ${bedNames.join(" and ")}` : "";
+  return {
+    at: now.toISOString(),
+    activity,
+    bedNames,
+    summary: `${activity}${where}`,
+    start: draft.start,
+    end: draft.end,
+    startAmpm: draft.startAmpm,
+    endAmpm: draft.endAmpm,
+    durationMin: draft.durationMin,
+    dayOffset: draft.dayOffset,
+  };
+}
+
+function multiBedPhrase(activity: ActivityType, bedNames: string[], planned: boolean): string {
+  const joined = bedNames.join(" and ");
+  const verb = planned
+    ? activity === "water"
+      ? "water"
+      : activity === "weed"
+        ? "weed"
+        : activity === "harvest"
+          ? "harvest"
+          : activity === "plant"
+            ? "plant"
+            : "work"
+    : activity === "water"
+      ? "watered"
+      : activity === "weed"
+        ? "weeded"
+        : activity === "harvest"
+          ? "harvested"
+          : activity === "plant"
+            ? "planted"
+            : "worked";
+  return `${verb} ${joined}`;
 }
 
 /** Compact confirmation for multi-day / standing series (keeps SMS short). */
 function seriesWhen(sessions: WorkSession[], now: Date, timeZone: string, weeks: number): string {
   if (sessions.length === 1) {
+    return whenPhrase(new Date(sessions[0].start), new Date(sessions[0].end), now, timeZone);
+  }
+  // Same clock on several beds → one when-phrase (not "today 5pm; today 5pm").
+  const sameSlot = sessions.every(
+    (session) => session.start === sessions[0].start && session.end === sessions[0].end,
+  );
+  if (sameSlot) {
     return whenPhrase(new Date(sessions[0].start), new Date(sessions[0].end), now, timeZone);
   }
   const first = sessions[0];
@@ -453,12 +614,11 @@ async function commit(
     }
     session.planting_id = plantingId;
   } else if (activity === "harvest") {
-    const target = await resolveHarvestTarget(store, bed, planting, crop, interval.day);
-    if (target) {
-      await store.updatePlanting({ ...target, removed_date: interval.day });
-      plantingId = target.id;
+    const cleared = await clearHarvestFromBed(store, bed, planting, crop, interval.day);
+    if (cleared.length) {
+      plantingId = cleared[0].id;
       session.planting_id = plantingId;
-      if (!session.bed_id) session.bed_id = target.bed_id;
+      if (!session.bed_id) session.bed_id = cleared[0].bed_id;
     } else if (plantingId) {
       session.planting_id = plantingId;
     }
@@ -473,6 +633,8 @@ async function commit(
     ...previous,
     pending: null,
     lastSessionId: session.id,
+    lastSessionIds: [session.id],
+    memory: memoryFromDraft(draft, bed ? [bed] : [], session, now),
   });
   const phrase = planned
     ? planPhrase(activity, crop, bed?.name ?? null)
@@ -489,14 +651,21 @@ async function commit(
 
 /** Turn one draft into one draft per weekday × standing week. */
 export function expandOccurrences(draft: SessionDraft, now: Date, timeZone: string): SessionDraft[] {
+  const weeks = Math.max(1, draft.recurringWeeks || 1);
+  // Relative days are one-shot logs — never explode into a series.
+  if (draft.dayOffset != null && weeks <= 1) {
+    return [{ ...draft, weekday: null, weekdays: [], recurringWeeks: 1, nextWeek: false }];
+  }
+
   const days =
     draft.weekdays?.length > 0
       ? draft.weekdays
       : draft.weekday != null
         ? [draft.weekday]
         : [null];
-  const weeks = Math.max(1, draft.recurringWeeks || 1);
   if (days.length === 1 && days[0] == null && weeks === 1) return [draft];
+  // A single named weekday with no "weekly/standing" stays one occurrence.
+  if (days.length === 1 && weeks === 1 && draft.onDate == null) return [draft];
 
   const out: SessionDraft[] = [];
   for (let week = 0; week < weeks; week += 1) {
@@ -526,19 +695,46 @@ async function cancelPlans(
   store: Store,
   person: Person,
   instruction: string,
+  includePast: boolean,
   now: Date,
   say: (line: string) => Promise<void>,
 ): Promise<WorkSession | null> {
-  const future = (await store.listSessions())
-    .filter((session) => session.person_id === person.id && new Date(session.start).getTime() > now.getTime())
+  const mine = (await store.listSessions())
+    .filter((session) => session.person_id === person.id)
+    .sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime());
+  const future = mine
+    .filter((session) => new Date(session.start).getTime() > now.getTime())
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-  if (future.length === 0) {
-    await say("I don't have a future plan of yours to cancel.");
+
+  const pool = includePast ? mine : future;
+  if (pool.length === 0) {
+    await say(includePast ? "I don't have a log of yours to delete." : "I don't have a future plan of yours to cancel.");
     return null;
   }
 
-  const hint = instruction ? parseDraft(instruction) : null;
-  let targets = future;
+  // Bare "delete" undoes the last batch; bare "cancel" drops the soonest upcoming plan.
+  if (!instruction.trim()) {
+    if (includePast) return undo(store, person, now, say);
+    const targets = future.slice(0, 1);
+    if (!targets.length) {
+      await say("I don't have a future plan of yours to cancel.");
+      return null;
+    }
+    await removeSessions(store, person, targets, now, say, "Canceled");
+    return null;
+  }
+
+  const hint = parseDraft(instruction);
+  let targets = pool;
+  if (hint?.dayOffset != null || hint?.onDate) {
+    const day =
+      hint.onDate != null
+        ? resolveStoredDate(hint.onDate, todayYmd(now, person.timezone))
+        : addDays(todayYmd(now, person.timezone), hint.dayOffset ?? 0);
+    if (day) {
+      targets = targets.filter((session) => todayYmd(new Date(session.start), person.timezone) === day);
+    }
+  }
   if (hint?.weekday != null || hint?.weekdays?.length) {
     const wanted = new Set(hint.weekdays.length ? hint.weekdays : hint.weekday != null ? [hint.weekday] : []);
     targets = targets.filter((session) => wanted.has(partsInZone(new Date(session.start), person.timezone).weekday));
@@ -546,41 +742,42 @@ async function cancelPlans(
   if (hint?.activity) {
     targets = targets.filter((session) => session.activity_type === hint.activity);
   }
+  if (hint?.crop) {
+    const crop = hint.crop.toLowerCase();
+    targets = targets.filter((session) => `${session.notes} ${session.raw_message}`.toLowerCase().includes(crop));
+  }
   if (hint?.start && hint.startAmpm) {
     const hour = to24(hint.start.h, hint.startAmpm);
     targets = targets.filter((session) => partsInZone(new Date(session.start), person.timezone).hour === hour);
   }
-  if (hint?.onDate) {
-    const day = resolveStoredDate(hint.onDate, todayYmd(now, person.timezone));
-    if (day) {
-      targets = targets.filter((session) => todayYmd(new Date(session.start), person.timezone) === day);
+  // Fall back to raw substring match when the draft parser found nothing useful.
+  if (targets === pool || (targets.length === pool.length && !hint?.activity && !hint?.crop && hint?.dayOffset == null && !hint?.onDate)) {
+    const needle = instruction.toLowerCase().trim();
+    if (needle) {
+      const hit = pool.filter((session) => `${session.notes} ${session.raw_message}`.toLowerCase().includes(needle));
+      if (hit.length) targets = hit;
     }
   }
+  if (targets.length > 1) {
+    const grouped = new Map<string, WorkSession[]>();
+    for (const session of targets) {
+      const key = session.raw_message || session.id;
+      grouped.set(key, [...(grouped.get(key) ?? []), session]);
+    }
+    const biggest = [...grouped.values()].sort((a, b) => b.length - a.length)[0];
+    if (biggest?.length) targets = biggest;
+  }
 
-  // Bare "cancel" / "delete" removes the soonest upcoming plan.
-  if (!instruction.trim()) targets = future.slice(0, 1);
   if (targets.length === 0) {
-    await say("I couldn't find a matching future plan to cancel.");
+    await say(
+      includePast
+        ? 'I couldn\'t find that log. Try "undo", "delete yesterday", or "delete winter rye".'
+        : "I couldn't find a matching future plan to cancel.",
+    );
     return null;
   }
 
-  for (const session of targets) await store.deleteSession(session.id);
-  const conversation = await store.getConversation(person.phone);
-  const removedIds = new Set(targets.map((session) => session.id));
-  await store.saveConversation(person.phone, {
-    ...conversation,
-    pending: null,
-    lastSessionId: conversation.lastSessionId && removedIds.has(conversation.lastSessionId)
-      ? null
-      : conversation.lastSessionId,
-  });
-
-  if (targets.length === 1) {
-    const session = targets[0];
-    await say(`Canceled: ${whenPhrase(new Date(session.start), new Date(session.end), now, person.timezone)}.`);
-  } else {
-    await say(`Canceled ${targets.length} upcoming plans.`);
-  }
+  await removeSessions(store, person, targets, now, say, includePast ? "Removed" : "Canceled");
   return null;
 }
 
@@ -590,35 +787,75 @@ async function undo(
   now: Date,
   say: (line: string) => Promise<void>,
 ): Promise<WorkSession | null> {
-  const sessions = (await store.listSessions())
-    .filter((session) => session.person_id === person.id)
-    .sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime());
-  const last = sessions[0];
-  if (!last) {
-    await say("I don't have a log from you to undo.");
-    return null;
+  const conversation = await store.getConversation(person.phone);
+  const batchIds =
+    conversation.lastSessionIds?.length
+      ? conversation.lastSessionIds
+      : conversation.lastSessionId
+        ? [conversation.lastSessionId]
+        : [];
+  const mine = await store.listSessions();
+  let targets = batchIds
+    .map((id) => mine.find((session) => session.id === id && session.person_id === person.id))
+    .filter((session): session is WorkSession => Boolean(session));
+
+  if (targets.length === 0) {
+    const last = mine
+      .filter((session) => session.person_id === person.id)
+      .sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime())[0];
+    if (!last) {
+      await say("I don't have a log from you to undo.");
+      return null;
+    }
+    targets = [last];
   }
-  await store.deleteSession(last.id);
+
+  await removeSessions(store, person, targets, now, say, "Removed");
+  return null;
+}
+
+async function removeSessions(
+  store: Store,
+  person: Person,
+  targets: WorkSession[],
+  now: Date,
+  say: (line: string) => Promise<void>,
+  label: string,
+): Promise<void> {
   const plantings = await store.listPlantings();
-  for (const planting of plantings) {
-    if (planting.source_session_id === last.id) await store.deletePlanting(planting.id);
-  }
-  if (last.activity_type === "harvest" && last.planting_id) {
-    const planting = plantings.find((item) => item.id === last.planting_id);
-    const day = todayYmd(new Date(last.start), person.timezone);
-    if (planting?.removed_date === day) {
-      await store.updatePlanting({ ...planting, removed_date: null });
+  const removedIds = new Set(targets.map((session) => session.id));
+  for (const session of targets) {
+    await store.deleteSession(session.id);
+    for (const planting of plantings) {
+      if (planting.source_session_id === session.id) await store.deletePlanting(planting.id);
     }
   }
+  for (const session of targets.filter((item) => item.activity_type === "harvest")) {
+    const day = todayYmd(new Date(session.start), person.timezone);
+    for (const planting of plantings) {
+      if (planting.removed_date !== day) continue;
+      if (session.bed_id && planting.bed_id === session.bed_id) {
+        await store.updatePlanting({ ...planting, removed_date: null });
+      } else if (planting.id === session.planting_id) {
+        await store.updatePlanting({ ...planting, removed_date: null });
+      }
+    }
+  }
+
   const conversation = await store.getConversation(person.phone);
   await store.saveConversation(person.phone, {
     ...conversation,
     pending: null,
-    lastSessionId: conversation.lastSessionId === last.id ? null : conversation.lastSessionId,
+    lastSessionId: conversation.lastSessionId && removedIds.has(conversation.lastSessionId) ? null : conversation.lastSessionId,
+    lastSessionIds: (conversation.lastSessionIds ?? []).filter((id) => !removedIds.has(id)),
   });
-  const when = whenPhrase(new Date(last.start), new Date(last.end), now, person.timezone);
-  await say(`Removed your last log (${when}).`);
-  return null;
+
+  if (targets.length === 1) {
+    const session = targets[0];
+    await say(`${label} your log (${whenPhrase(new Date(session.start), new Date(session.end), now, person.timezone)}).`);
+  } else {
+    await say(`${label} ${targets.length} logs from that batch.`);
+  }
 }
 
 async function edit(
@@ -715,23 +952,27 @@ function needsRow(activity: ActivityType): boolean {
   return activity === "plant" || activity === "weed" || activity === "water" || activity === "harvest" || activity === "prep";
 }
 
-/** Find the in-ground crop a harvest text is clearing, so the bed shows empty from that day on. */
-async function resolveHarvestTarget(
+/** Harvest clears whatever is still in-ground on that bed (mixed beds included). */
+async function clearHarvestFromBed(
   store: Store,
   bed: Bed | null,
   planting: Planting | null,
   crop: string | null,
   day: string,
-): Promise<Planting | null> {
-  if (planting && isActive(planting, day)) return planting;
+): Promise<Planting[]> {
   const active = activePlantings(await store.listPlantings(), day);
-  const onBed = bed ? active.filter((item) => item.bed_id === bed.id) : active;
-  if (crop) {
-    const named = onBed.find((item) => item.crop.toLowerCase() === crop.toLowerCase());
-    if (named) return named;
+  let targets: Planting[] = [];
+  if (bed) {
+    targets = active.filter((item) => item.bed_id === bed.id);
+  } else if (planting && isActive(planting, day)) {
+    targets = active.filter((item) => item.bed_id === planting.bed_id);
+  } else if (crop) {
+    targets = active.filter((item) => item.crop.toLowerCase() === crop.toLowerCase());
   }
-  if (onBed.length === 1) return onBed[0];
-  return null;
+  for (const item of targets) {
+    await store.updatePlanting({ ...item, removed_date: day });
+  }
+  return targets;
 }
 
 export function resolveInterval(

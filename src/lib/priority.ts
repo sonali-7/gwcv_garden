@@ -91,9 +91,14 @@ export function buildTasks(input: {
 
   const meeting = nextMeeting(input.now, timeZone);
   const meetingDay = ymd(partsInZone(meeting, timeZone));
+  const todayStart = zonedToUtc(today, 0, 0, timeZone).getTime();
+  const meetingEnd = meeting.getTime() + 2 * 60 * 60_000;
   const alreadyMet = input.sessions.some((session) => {
     if (session.activity_type !== "meeting") return false;
-    return todayYmd(new Date(session.start), timeZone) === meetingDay;
+    const start = new Date(session.start).getTime();
+    // Logged/scheduled for the meeting day, or any upcoming meeting plan this week.
+    if (todayYmd(new Date(session.start), timeZone) === meetingDay) return true;
+    return start >= todayStart && start <= meetingEnd;
   });
   if (!alreadyMet) {
     tasks.push({

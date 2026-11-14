@@ -4,7 +4,7 @@ import { canonicalCrop, knownCrops } from "./crops";
 export type ParsedMessage =
   | { kind: "emergency" }
   | { kind: "undo" }
-  | { kind: "cancel"; instruction: string }
+  | { kind: "cancel"; instruction: string; includePast: boolean }
   | { kind: "query_schedule" }
   | { kind: "query_watering" }
   | { kind: "edit"; instruction: string }
@@ -18,7 +18,7 @@ const ACTIVITIES: Array<[RegExp, ActivityType]> = [
   [/\b(weeded|weeding|weed)\b/i, "weed"],
   [/\b(watered|watering|water)\b/i, "water"],
   [/\b(harvested|harvest|picked|picking)\b/i, "harvest"],
-  [/\b(planted|planting|plant|sowed|sown|sow)\b/i, "plant"],
+  [/\b(planted|planting|plant|sowed|sown|sow|filled|fill)\b/i, "plant"],
   [/\b(mulched|mulch|tilled|till|prepped|prepared|prep)\b/i, "prep"],
   [/\b(meeting|met)\b/i, "meeting"],
   [/\b(checked|walked|turned)\b/i, "other"],
@@ -78,11 +78,17 @@ export function isFutureWording(draft: SessionDraft): boolean {
 }
 
 export function questionFor(draft: SessionDraft, field: "start" | "ampm" | "end" | "day"): string {
-  if (field === "day") return "Which day?";
+  if (field === "day") return 'Which day? (or text "options")';
   if (field === "start") {
-    return isFutureWording(draft) ? "What time should I put?" : "What time did you start?";
+    return isFutureWording(draft)
+      ? 'What time should I put? (or text "options")'
+      : 'What time did you start? (or text "options")';
   }
-  if (field === "end") return isFutureWording(draft) ? "Until when?" : "Until when did you go?";
+  if (field === "end") {
+    return isFutureWording(draft)
+      ? 'Until when? (or text "options")'
+      : 'Until when did you go? (or text "options")';
+  }
   const start = draft.start;
   const end = draft.end;
   if (start && end && rangeCrossesMeridian(start, end)) {
@@ -96,6 +102,62 @@ export function questionFor(draft: SessionDraft, field: "start" | "ampm" | "end"
   return "Was that morning or evening?";
 }
 
+/** "help", "what are the options", "which rows", etc. while clarifying. */
+export function isHelpRequest(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  if (!lower) return false;
+  if (/^(help|options|\?+)$/i.test(lower)) return true;
+  if (/^(what|which|list|show)\b/.test(lower) && /\b(option|options|row|rows|bed|beds|choice|choices|day|days|time|times)\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(what are (the |my )?options|which rows?|which beds?|list (the )?rows|list (the )?beds)\b/.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+export function helpForTimeField(field: "start" | "ampm" | "end" | "day"): string {
+  if (field === "day") {
+    return 'Pick a day like "Saturday", "next Tuesday", or "November 19".';
+  }
+  if (field === "ampm") {
+    return 'Reply "am" or "pm" (or morning / afternoon).';
+  }
+  if (field === "end") {
+    return 'Send an end time like "2pm", "11", or "for 30 minutes".';
+  }
+  return 'Send a start time like "10am", "2 pm", or "from 8–9am".';
+}
+
+export function rowQuestion(choices: string[], allBeds: string[]): string {
+  if (choices.length >= 2) {
+    return `Which row — ${choices.join(" or ")}? (text "options" for the full list)`;
+  }
+  if (choices.length === 1) {
+    return `Which row — ${choices[0]}? (text "options" for the full list)`;
+  }
+  if (allBeds.length === 0) return "Which row?";
+  if (allBeds.length <= 6) return `Which row? Options: ${allBeds.join(", ")}.`;
+  return `Which row? Text a bed name, or text "options" to see all ${allBeds.length}.`;
+}
+
+export function rowOptionsReply(choices: string[], allBeds: string[]): string {
+  if (choices.length >= 2) {
+    const rest = allBeds.filter((name) => !choices.some((choice) => choice.toLowerCase() === name.toLowerCase()));
+    if (rest.length) {
+      return `Closest matches: ${choices.join(", ")}. All beds: ${formatBedList(allBeds)}.`;
+    }
+    return `Options: ${choices.join(", ")}.`;
+  }
+  if (allBeds.length === 0) return "I don't have any beds listed yet.";
+  return `Beds: ${formatBedList(allBeds)}. Reply with one of those names.`;
+}
+
+function formatBedList(names: string[]): string {
+  if (names.length <= 12) return names.join(", ");
+  return `${names.slice(0, 12).join(", ")}, … (+${names.length - 12} more)`;
+}
+
 function clockLabel(clock: { h: number; m: number }): string {
   if (clock.m === 0) return String(clock.h);
   return `${clock.h}:${String(clock.m).padStart(2, "0")}`;
@@ -105,11 +167,13 @@ export function parseMessage(text: string): ParsedMessage {
   const trimmed = text.trim();
   if (!trimmed) return { kind: "unknown" };
   if (isEmergency(trimmed)) return { kind: "emergency" };
-  if (/^\s*undo\b/i.test(trimmed)) return { kind: "undo" };
+  if (/^(?:sorry[,!. ]*)?undo\b/i.test(trimmed)) return { kind: "undo" };
   if (/^\s*(cancel|delete|remove)\b/i.test(trimmed)) {
+    const includePast = /^\s*(delete|remove)\b/i.test(trimmed);
     return {
       kind: "cancel",
       instruction: trimmed.replace(/^\s*(cancel|delete|remove)\b[:\s-]*/i, "").trim(),
+      includePast,
     };
   }
   if (isScheduleQuery(trimmed)) return { kind: "query_schedule" };
@@ -452,13 +516,25 @@ function findCrop(lower: string): string | null {
   for (const crop of knownCrops()) {
     if (includesPhrase(lower, crop)) return canonicalCrop(crop);
   }
+  const filledWith = lower.match(
+    /\b(?:filled|fill)\b.+\bwith\s+(?:some\s+)?([a-z][a-z ]{1,32}?)(?:\s+at\b|\s+from\b|\s+today\b|\s+yesterday\b|\s+tomorrow\b|$)/,
+  );
+  if (filledWith) {
+    const phrase = cleanCropPhrase(filledWith[1]);
+    if (phrase) return canonicalCrop(phrase);
+  }
   const planted = lower.match(
     /\b(?:planted|planting|sowed|sow|schedule(?:d|ing)?)\s+(?:some\s+)?([a-z][a-z ]{1,32}?)(?:\s+in\b|\s+on\b|\s+at\b|\s+for\b|\s+from\b|\s+today\b|\s+yesterday\b|$)/,
   );
   if (!planted) return null;
-  const phrase = planted[1].replace(/\b(the|some|a|an|row|bed)\b/g, " ").replace(/\s+/g, " ").trim();
+  const phrase = cleanCropPhrase(planted[1]);
   if (!phrase || phrase.length < 3) return null;
   return canonicalCrop(phrase);
+}
+
+function cleanCropPhrase(raw: string): string | null {
+  const phrase = raw.replace(/\b(the|some|a|an|row|bed)\b/g, " ").replace(/\s+/g, " ").trim();
+  return phrase || null;
 }
 
 function includesPhrase(hay: string, phrase: string): boolean {

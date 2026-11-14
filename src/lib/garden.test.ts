@@ -4,19 +4,24 @@ import { placeSlices, sessionStatus, slicesForSession } from "./calendar";
 import { loadDashboard } from "./dashboard-data";
 import { expandOccurrences, handleIncoming, resolveInterval } from "./handle-message";
 import { createMemoryStore } from "./memory-store";
-import { mergeDrafts, messageFromTool } from "./agent";
+import { applyMemory, mergeDrafts, messageFromTool, wantsReusePrior } from "./agent";
 import {
   applyClarification,
   calendarDate,
+  isHelpRequest,
   needsDay,
   parseDraft,
   parseMessage,
   questionFor,
+  rowOptionsReply,
+  rowQuestion,
   timeGaps,
 } from "./parse";
+import { isMultiAccept, matchLocation } from "./location";
 import { buildTasks } from "./priority";
 import { buildSeed } from "./seed";
 import { DEFAULT_TZ, partsInZone, startOfWeekYmd, zonedToUtc } from "./time";
+import type { Bed, Planting, TextMemory } from "./types";
 import { LIMIT_NOTICE, photonReply } from "./photon";
 import { readPhotonInbound, verifyStandardWebhook } from "./webhook";
 import { createHmac } from "node:crypto";
@@ -57,6 +62,13 @@ describe("parser", () => {
     assert.equal(parseMessage("what needs watering?").kind, "query_watering");
     assert.equal(parseMessage("undo").kind, "undo");
     assert.equal(parseMessage("I hurt my hand").kind, "emergency");
+    assert.equal(isHelpRequest("what are the options"), true);
+    assert.equal(isHelpRequest("options"), true);
+    assert.equal(isHelpRequest("help"), true);
+    assert.equal(isHelpRequest("which rows"), true);
+    assert.equal(isHelpRequest("carrot row"), false);
+    assert.match(rowQuestion([], ["Carrot row", "Space X"]), /Options: Carrot row, Space X/);
+    assert.match(rowOptionsReply(["Kale", "Kale / Peas"], ["Kale", "Kale / Peas", "Space X"]), /Closest matches/);
   });
 
   it("treats schedule-a-crop as a planting, not a week readout", () => {
@@ -164,6 +176,107 @@ describe("parser", () => {
     if (parsed?.kind !== "session") return;
     assert.equal(parsed.draft.crop, "kumquats");
     assert.deepEqual(timeGaps(parsed.draft), ["ampm"]);
+  });
+});
+
+describe("location match", () => {
+  const beds: Bed[] = [
+    { id: "bed-kale", name: "Kale", row: "a", geometry: null },
+    { id: "bed-kale-peas", name: "Kale / Peas", row: "b", geometry: null },
+    { id: "bed-x", name: "Space X", row: "c", geometry: null },
+  ];
+  const plantings: Planting[] = [
+    {
+      id: "p-kale",
+      bed_id: "bed-kale",
+      crop: "kale",
+      planted_date: "2026-09-01",
+      expected_harvest_date: "2026-12-01",
+      removed_date: null,
+      season_year: 2026,
+      days_to_maturity: 60,
+      source_session_id: null,
+    },
+    {
+      id: "p-peas",
+      bed_id: "bed-kale-peas",
+      crop: "peas",
+      planted_date: "2026-09-01",
+      expected_harvest_date: "2026-12-01",
+      removed_date: null,
+      season_year: 2026,
+      days_to_maturity: 60,
+      source_session_id: null,
+    },
+    {
+      id: "p-kale2",
+      bed_id: "bed-kale-peas",
+      crop: "kale",
+      planted_date: "2026-09-01",
+      expected_harvest_date: "2026-12-01",
+      removed_date: null,
+      season_year: 2026,
+      days_to_maturity: 60,
+      source_session_id: null,
+    },
+  ];
+
+  it("prefers Kale / Peas over Kale when both names match", () => {
+    const hit = matchLocation("harvested peas from kale/peas", beds, plantings, "2026-11-13");
+    assert.equal(hit.bed?.id, "bed-kale-peas");
+    assert.equal(hit.ambiguous, false);
+  });
+
+  it("accepts the longer choice as a clarifying reply", () => {
+    const hit = matchLocation("Kale / Peas", beds, plantings, "2026-11-13", {
+      choices: ["Kale", "Kale / Peas"],
+    });
+    assert.equal(hit.bed?.id, "bed-kale-peas");
+    assert.equal(hit.ambiguous, false);
+  });
+
+  it("logs every named plot and treats both as all choices", () => {
+    const plots: Bed[] = [
+      ...beds,
+      { id: "bed-8", name: "Plot 8", row: "8", geometry: null },
+      { id: "bed-9", name: "Plot 9", row: "9", geometry: null },
+    ];
+    const named = matchLocation("watered mint in plot 8 and peas in plot 9", plots, plantings, "2026-11-14");
+    assert.equal(named.ambiguous, false);
+    assert.deepEqual(
+      named.beds.map((bed) => bed.id).sort(),
+      ["bed-8", "bed-9"],
+    );
+    assert.equal(isMultiAccept("both"), true);
+    const both = matchLocation("both", plots, plantings, "2026-11-14", {
+      choices: ["Plot 8", "Plot 9"],
+    });
+    assert.equal(both.beds.length, 2);
+  });
+});
+
+describe("text memory", () => {
+  it("reuses the prior interval for also / same time follow-ups", () => {
+    assert.equal(wantsReusePrior("i also watered mint in plot 8 at the same time"), true);
+    const memory: TextMemory = {
+      at: NOW.toISOString(),
+      activity: "water",
+      bedNames: ["Kale / Peas 2"],
+      summary: "water on Kale / Peas 2",
+      start: { h: 5, m: 0 },
+      end: { h: 5, m: 38 },
+      startAmpm: "pm",
+      endAmpm: "pm",
+      durationMin: null,
+      dayOffset: 0,
+    };
+    const draft = parseDraft("i also watered mint in plot 8 and peas in plot 9 at the same time");
+    assert.ok(draft);
+    const filled = applyMemory(draft!, "i also watered mint in plot 8 and peas in plot 9 at the same time", memory, true);
+    assert.deepEqual(filled.start, { h: 5, m: 0 });
+    assert.deepEqual(filled.end, { h: 5, m: 38 });
+    assert.equal(filled.startAmpm, "pm");
+    assert.equal(filled.endAmpm, "pm");
   });
 });
 
@@ -278,12 +391,77 @@ describe("text log", () => {
       text: "weeded the carrot row for an hour",
       now: NOW,
     });
-    assert.equal(asked.replies[0], "What time did you start?");
+    assert.match(asked.replies[0], /What time did you start/);
     const logged = await handleIncoming(store, { phone: "+15555501003", text: "10am", now: NOW });
     assert.equal(logged.session?.bed_id, "bed-carrot");
     assert.equal(logged.session?.planting_id, "planting-carrots");
     const start = new Date(logged.session!.start);
     assert.equal(start.toISOString(), zonedToUtc("2026-11-14", 10, 0, DEFAULT_TZ).toISOString());
+  });
+
+  it("remembers the last watering and logs two named plots at the same time", async () => {
+    const seed = buildSeed(NOW);
+    seed.beds.push(
+      { id: "bed-8", name: "Plot 8", row: "8", geometry: null },
+      { id: "bed-9", name: "Plot 9", row: "9", geometry: null },
+      { id: "bed-kale-peas-2", name: "Kale / Peas 2", row: "k2", geometry: null },
+    );
+    seed.plantings.push({
+      id: "p-mint-8",
+      bed_id: "bed-8",
+      crop: "mint",
+      planted_date: "2026-09-01",
+      expected_harvest_date: "2026-12-01",
+      removed_date: null,
+      season_year: 2026,
+      days_to_maturity: 60,
+      source_session_id: null,
+    });
+    const store = createMemoryStore(seed);
+    const first = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "i watered the kale/peas 2 from 5pm-5:38pm",
+      now: NOW,
+    });
+    assert.equal(first.session?.bed_id, "bed-kale-peas-2");
+    const second = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "i also watered mint in plot 8 and peas in plot 9 at the same time",
+      now: NOW,
+    });
+    assert.match(second.replies[0], /(?:Logged|Scheduled): Emma/);
+    assert.match(second.replies[0], /Plot 8 and Plot 9/);
+    assert.ok(!/Which row/i.test(second.replies[0]));
+    assert.ok(!/; today/.test(second.replies[0]));
+    const waters = (await store.listSessions()).filter(
+      (session) =>
+        session.person_id === "person-emma" &&
+        session.activity_type === "water" &&
+        (session.bed_id === "bed-8" || session.bed_id === "bed-9"),
+    );
+    assert.equal(waters.length, 2);
+    assert.ok(waters.every((session) => session.start === first.session?.start));
+  });
+
+  it("lists bed options when someone asks during Which row", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const asked = await handleIncoming(store, {
+      phone: "+15555501002",
+      text: "from 8-9am I planted kale",
+      now: NOW,
+    });
+    assert.match(asked.replies[0], /Which row/);
+    const help = await handleIncoming(store, {
+      phone: "+15555501002",
+      text: "what are the options",
+      now: NOW,
+    });
+    assert.match(help.replies[0], /Beds:/);
+    assert.match(help.replies[0], /Space X/);
+    assert.match(help.replies[0], /Carrot row/);
+    assert.equal(help.session, null);
+    const logged = await handleIncoming(store, { phone: "+15555501002", text: "space x", now: NOW });
+    assert.equal(logged.session?.bed_id, "bed-x");
   });
 
   it("learns a new volunteer's name, then logs the stashed text", async () => {
@@ -297,7 +475,7 @@ describe("text log", () => {
     assert.match(first.replies[0], /name/i);
     const named = await handleIncoming(store, { phone, text: "Priya", now: NOW });
     assert.match(named.replies[0], /Priya/);
-    assert.equal(named.replies[1], "What time did you start?");
+    assert.match(named.replies[1], /What time did you start/);
     const logged = await handleIncoming(store, { phone, text: "2pm", now: NOW });
     assert.equal(logged.person?.name, "Priya");
     assert.equal(logged.session?.bed_id, "bed-carrot");
@@ -363,6 +541,45 @@ describe("text log", () => {
     assert.ok(!/10pm/.test(logged.replies[0]));
   });
 
+  it("accepts Kale / Peas after asking Kale or Kale / Peas", async () => {
+    const seed = buildSeed(NOW);
+    seed.beds.push(
+      { id: "bed-kale", name: "Kale", row: "a", geometry: null },
+      { id: "bed-kale-peas", name: "Kale / Peas", row: "b", geometry: null },
+    );
+    seed.plantings.push({
+      id: "planting-peas-kale",
+      bed_id: "bed-kale-peas",
+      crop: "peas",
+      planted_date: "2026-09-01",
+      expected_harvest_date: "2026-12-01",
+      removed_date: null,
+      season_year: 2026,
+      days_to_maturity: 60,
+      source_session_id: null,
+    });
+    const store = createMemoryStore(seed);
+    const first = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "i harvested peas from kale/peas on friday from 2pm-3pm",
+      now: NOW,
+    });
+    // Longest-name match should resolve without asking — or accept the reply if asked.
+    if (first.session) {
+      assert.equal(first.session.bed_id, "bed-kale-peas");
+      assert.equal(first.session.activity_type, "harvest");
+      return;
+    }
+    assert.match(first.replies[0], /Which row/i);
+    const second = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "Kale / Peas",
+      now: NOW,
+    });
+    assert.equal(second.session?.bed_id, "bed-kale-peas");
+    assert.ok(!/Which row/i.test(second.replies[0]));
+  });
+
   it("creates a planting when someone plants into an empty row", async () => {
     const store = createMemoryStore(buildSeed(NOW));
     await handleIncoming(store, { phone: "+15555501002", text: "from 8-9am I planted kale", now: NOW });
@@ -394,6 +611,133 @@ describe("text log", () => {
     await handleIncoming(store, { phone: "+15555501001", text: "undo", now: NOW });
     const restored = (await store.listPlantings()).find((item) => item.id === "planting-carrots");
     assert.equal(restored?.removed_date, null);
+  });
+
+  it("harvest clears every crop still in a mixed bed", async () => {
+    const seed = buildSeed(NOW);
+    seed.beds.push({ id: "bed-kale-peas", name: "Kale / Peas", row: "b", geometry: null });
+    seed.plantings.push(
+      {
+        id: "p-kale-mix",
+        bed_id: "bed-kale-peas",
+        crop: "kale",
+        planted_date: "2026-09-01",
+        expected_harvest_date: "2026-12-01",
+        removed_date: null,
+        season_year: 2026,
+        days_to_maturity: 60,
+        source_session_id: null,
+      },
+      {
+        id: "p-peas-mix",
+        bed_id: "bed-kale-peas",
+        crop: "peas",
+        planted_date: "2026-09-01",
+        expected_harvest_date: "2026-12-01",
+        removed_date: null,
+        season_year: 2026,
+        days_to_maturity: 60,
+        source_session_id: null,
+      },
+    );
+    const store = createMemoryStore(seed);
+    const logged = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "harvested the kale/peas row from 2-3pm",
+      now: NOW,
+    });
+    assert.equal(logged.session?.activity_type, "harvest");
+    assert.equal(logged.session?.bed_id, "bed-kale-peas");
+    const plantings = await store.listPlantings();
+    assert.equal(plantings.find((item) => item.id === "p-kale-mix")?.removed_date, "2026-11-14");
+    assert.equal(plantings.find((item) => item.id === "p-peas-mix")?.removed_date, "2026-11-14");
+  });
+
+  it("logs a single yesterday planting, and delete removes past buggy batches", async () => {
+    const seed = buildSeed(NOW);
+    seed.beds.push({ id: "bed-nothing", name: "Nothing", row: "z", geometry: null });
+    const store = createMemoryStore(seed);
+    const filled = parseMessage("yesterday i filled nothing with winter rye at 1 pm to 2 pm");
+    assert.equal(filled.kind, "session");
+    if (filled.kind === "session") {
+      assert.equal(filled.draft.activity, "plant");
+      assert.equal(filled.draft.crop, "winter rye");
+      assert.equal(filled.draft.dayOffset, -1);
+      assert.equal(filled.draft.recurringWeeks, 1);
+      assert.deepEqual(filled.draft.weekdays, []);
+      assert.equal(expandOccurrences(filled.draft, NOW, DEFAULT_TZ).length, 1);
+    }
+
+    const logged = await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "yesterday i filled nothing with winter rye at 1 pm to 2 pm",
+      now: NOW,
+    });
+    assert.match(logged.replies[0], /Logged: Jeremy/);
+    assert.ok(!/\d+ times/.test(logged.replies[0]));
+    assert.equal(logged.session?.bed_id, "bed-nothing");
+    const ryeSessions = (await store.listSessions()).filter((session) =>
+      /winter rye/i.test(`${session.notes} ${session.raw_message}`),
+    );
+    assert.equal(ryeSessions.length, 1);
+
+    const deleted = await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "delete winter rye",
+      now: NOW,
+    });
+    assert.match(deleted.replies[0], /Removed/);
+    assert.equal(
+      (await store.listSessions()).filter((session) => /winter rye/i.test(`${session.notes} ${session.raw_message}`))
+        .length,
+      0,
+    );
+  });
+
+  it("watering and scheduling a meeting clear matching priority tasks", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const before = buildTasks({
+      now: NOW,
+      beds: await store.listBeds(),
+      plantings: await store.listPlantings(),
+      sessions: await store.listSessions(),
+      timeZone: DEFAULT_TZ,
+    });
+    assert.ok(before.some((task) => task.type === "water" && task.bed_id === "bed-sp"));
+    assert.ok(before.some((task) => task.type === "meeting"));
+
+    await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "watered the sweet potato row from 9-10am",
+      now: NOW,
+    });
+    const afterWater = buildTasks({
+      now: NOW,
+      beds: await store.listBeds(),
+      plantings: await store.listPlantings(),
+      sessions: await store.listSessions(),
+      timeZone: DEFAULT_TZ,
+    });
+    assert.ok(!afterWater.some((task) => task.type === "water" && task.bed_id === "bed-sp"));
+
+    await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "schedule a weekly meeting saturday from 10-11am",
+      now: NOW,
+    });
+    // If it asked for clarification, answer am already present — may schedule directly.
+    const conv = await store.getConversation("+15555501003");
+    if (conv.pending) {
+      await handleIncoming(store, { phone: "+15555501003", text: "am", now: NOW });
+    }
+    const afterMeet = buildTasks({
+      now: NOW,
+      beds: await store.listBeds(),
+      plantings: await store.listPlantings(),
+      sessions: await store.listSessions(),
+      timeZone: DEFAULT_TZ,
+    });
+    assert.ok(!afterMeet.some((task) => task.type === "meeting"));
   });
 
   it("undoes the last log and answers schedule and watering questions", async () => {
