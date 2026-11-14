@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { DropChoice } from "@/components/DropChoice";
 import { GardenMap } from "@/components/GardenMap";
+import { RemoveChoice } from "@/components/RemoveChoice";
 import { GardenTimeline, timelineRange } from "@/components/GardenTimeline";
 import { PlantList } from "@/components/PlantList";
 import { SketchImport } from "@/components/SketchImport";
 import { ViewTabs } from "@/components/ViewTabs";
 import type { GardenData } from "@/lib/garden-data";
-import { clearing, dropSituation, replacementDate, type Occupant } from "@/lib/drop-plan";
+import { clearing, cropsInPatch, dropSituation, isEstablished, replacementDate, type Occupant } from "@/lib/drop-plan";
 import { adviseBed, guideFor, type Recommendation } from "@/lib/recommend";
 import type { Bed, GardenLayout } from "@/lib/types";
 
@@ -36,15 +37,32 @@ export function GardenView({ initial }: { initial: GardenData }) {
   const [day, setDay] = useState(initial.today);
   // A crop dropped on a patch that already has something established in it (or several crops), waiting for a choice.
   const [dropping, setDropping] = useState<{ bedId: string; crop: string; there: Occupant[] } | null>(null);
+  // Delete pressed on a patch with several crops, waiting for which to remove.
+  const [removing, setRemoving] = useState<{ bedId: string; there: Occupant[] } | null>(null);
   const mode: "past" | "today" | "future" = day === data.today ? "today" : day < data.today ? "past" : "future";
 
+  // Escape deselects; Delete or Backspace removes the selected patch's plant (asking which, if there are several).
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") setSelectedId(null);
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      if (!selectedId || mode === "past" || busy || document.querySelector("dialog[open]")) return;
+      event.preventDefault();
+      const there = cropsInPatch(selectedId, data.plantings, day, data.today);
+      const bed = data.beds.find((item) => item.id === selectedId);
+      if (!there.length) {
+        setNotice(`Nothing growing or planned in ${bed?.name ?? "this bed"} to remove.`);
+        return;
+      }
+      if (there.length === 1) removeCrops([there[0].id]);
+      else setRemoving({ bedId: selectedId, there: there.map((planting) => ({ planting, established: isEstablished(planting, day) })) });
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    // Re-attached each render so it always sees the current selection, date, and data.
+  });
 
   // A link like /garden?day=2027-05-01 opens the timeline on that date.
   useEffect(() => {
@@ -132,6 +150,35 @@ export function GardenView({ initial }: { initial: GardenData }) {
           : `Planned ${crop} for ${bed.name} on ${label}.`,
       );
     });
+  }
+
+  /** Take crops out: plans that haven't started are deleted; anything planted is marked pulled on the date shown. */
+  function removeCrops(plantingIds: string[]) {
+    if (mode === "past") return;
+    const old = data.plantings.filter((p) => plantingIds.includes(p.id));
+    if (!old.length) return;
+    const bed = data.beds.find((item) => item.id === old[0].bed_id);
+    const steps = old.map((p) => ({ planting: p, how: clearing(p, day, data.today) }));
+    const pulled = steps.filter((s) => s.how.action === "pull").map((s) => s.planting.crop);
+    if (pulled.length && !window.confirm(`Mark the ${[...new Set(pulled)].join(" and ")} pulled on ${longDate(day)}? It stays in ${bed?.name ?? "the bed"}'s history.`)) return;
+    const names = [...new Set(old.map((p) => p.crop))].join(" and ");
+    run(async () => {
+      for (const { planting, how } of steps) {
+        if (how.action === "delete") await send(`/api/plantings/${planting.id}`, "DELETE");
+        else await send(`/api/plantings/${planting.id}`, "PATCH", { removed_date: how.on });
+      }
+      setNotice(`Removed the ${names} from ${bed?.name ?? "the bed"}.`);
+    });
+  }
+
+  /** The buttons on a suggestion card. Replace swaps what's in the patch (asking which, if there are several). */
+  function planFromCard(bedId: string, crop: string, how: "after" | "alongside" | "replace" = "after") {
+    if (how !== "replace") return plan(bedId, crop, how);
+    if (mode === "past") return;
+    const there = cropsInPatch(bedId, data.plantings, day, data.today);
+    if (!there.length) return plan(bedId, crop, "after");
+    if (there.length === 1) return replace(bedId, crop, [there[0].id]);
+    setDropping({ bedId, crop, there: there.map((planting) => ({ planting, established: isEstablished(planting, day) })) });
   }
 
   /**
@@ -244,7 +291,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
           editing={editing}
           busy={busy}
           onSelect={setSelectedId}
-          onPlan={plan}
+          onPlan={planFromCard}
           onRename={(bed, name) =>
             run(async () => {
               await send(`/api/beds/${bed.id}`, "PATCH", { name });
@@ -257,13 +304,23 @@ export function GardenView({ initial }: { initial: GardenData }) {
               setSelectedId(null);
             });
           }}
-          onUnplan={(id) =>
-            run(async () => {
-              await send(`/api/plantings/${id}`, "DELETE");
-            })
-          }
+          onRemove={removeCrops}
         />
       </div>
+      {removing ? (
+        <RemoveChoice
+          key={removing.bedId}
+          bedName={data.beds.find((bed) => bed.id === removing.bedId)?.name ?? "this bed"}
+          there={removing.there}
+          sprites={data.sprites}
+          busy={busy}
+          onRemove={(ids) => {
+            setRemoving(null);
+            removeCrops(ids);
+          }}
+          onCancel={() => setRemoving(null)}
+        />
+      ) : null}
       {dropping && dropBed ? (
         <DropChoice
           key={`${dropping.bedId}-${dropping.crop}`}
