@@ -42,7 +42,10 @@ const WATER: Record<Recommendation["water"], string> = {
 };
 
 export function PlantList(props: {
+  /** The garden as of the date shown on the timeline (data.today is that date). */
   data: GardenData;
+  /** Whether that date is before, on, or after the real today. Looking back is view only. */
+  mode: "past" | "today" | "future";
   advice: Map<string, BedAdvice>;
   selected: Bed | null;
   editing: boolean;
@@ -70,8 +73,14 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
   return (
     <>
       <h2>Plant list</h2>
-      <p className="sub">What's in each bed, and ideas for open spots based on rotation and the season.</p>
-      {open.length ? (
+      <p className="sub">
+        {props.mode === "past"
+          ? `What was in each bed on ${shortDate(data.today, true)}.`
+          : props.mode === "future"
+            ? `What will be in each bed on ${shortDate(data.today, true)}, and ideas for the open spots.`
+            : "What's in each bed, and ideas for open spots based on rotation and the season."}
+      </p>
+      {open.length && props.mode !== "past" ? (
         <div className="open-spots">
           {open.map((bed) => {
             const top = advice.get(bed.id)?.recommendations[0];
@@ -83,7 +92,7 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
                   {top ? (
                     <small>
                       Try {top.crop}
-                      {top.now ? " (can go in now)" : ` from ${shortDate(top.plantOn)}`}
+                      {top.now ? (props.mode === "future" ? " (can go in then)" : " (can go in now)") : ` from ${shortDate(top.plantOn)}`}
                     </small>
                   ) : null}
                 </span>
@@ -113,7 +122,9 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
                       ? statusLine(now, data.today) + (others.length ? ` · also ${others.join(", ")}` : "")
                       : next
                         ? `${title(next.crop)} planned for ${shortDate(next.planted_date)}`
-                        : "Open"}
+                        : props.mode === "past"
+                          ? "Empty"
+                          : "Open"}
                   </small>
                 </span>
               </button>
@@ -188,7 +199,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
       ) : null}
 
       <section className="block">
-        <h3>Now growing</h3>
+        <h3>{props.mode === "today" ? "Now growing" : `Growing on ${shortDate(data.today, true)}`}</h3>
         {a.current.length ? (
           a.current.map((planting) => (
             <div key={planting.id} className="growing">
@@ -199,7 +210,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
                   Planted {shortDate(planting.planted_date)} · {statusLine(planting, data.today).split(" · ")[1] ?? "growing"}
                 </small>
                 <small>
-                  {lastWater
+                  {props.mode === "future" ? "" : lastWater
                     ? `Last watered ${shortDate(lastWater.start.slice(0, 10))} by ${peopleById.get(lastWater.person_id)?.name ?? "someone"}`
                     : "No watering logged"}
                 </small>
@@ -236,6 +247,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
         </section>
       ) : null}
 
+      {props.mode === "past" ? null : (
       <section className="block">
         <h3>
           {a.current.length || a.planned.length ? `Plant next (bed free ${shortDate(a.freeFrom)})` : "Suggested for this bed"}
@@ -255,7 +267,9 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
               <header>
                 <Sprite crop={rec.crop} sprites={data.sprites} size={30} />
                 <strong>{title(rec.crop)}</strong>
-                <span className={rec.now ? "chip now" : "chip"}>{rec.now ? "Plant now" : `From ${shortDate(rec.plantOn)}`}</span>
+                <span className={rec.now ? "chip now" : "chip"}>
+                  {rec.now ? (props.mode === "future" ? "Plant then" : "Plant now") : `From ${shortDate(rec.plantOn, rec.plantOn.slice(0, 4) !== data.today.slice(0, 4))}`}
+                </span>
               </header>
               <ul className="why">
                 {rec.reasons.slice(0, 2).map((reason) => (
@@ -294,10 +308,11 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
         ) : null}
         {a.avoid.length ? (
           <p className="avoid">
-            <strong>Skip here this year:</strong> {a.avoid.map((item) => item.crop).join(", ")}. {uniqueReasons(a)}
+            <strong>Skip here in {data.today.slice(0, 4)}:</strong> {a.avoid.map((item) => item.crop).join(", ")}. {uniqueReasons(a)}
           </p>
         ) : null}
       </section>
+      )}
 
       {a.history.length ? (
         <section className="block">

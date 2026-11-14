@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { GardenMap } from "@/components/GardenMap";
+import { GardenTimeline, timelineRange } from "@/components/GardenTimeline";
 import { PlantList } from "@/components/PlantList";
 import { SketchImport } from "@/components/SketchImport";
 import { ViewTabs } from "@/components/ViewTabs";
@@ -29,6 +30,9 @@ export function GardenView({ initial }: { initial: GardenData }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [importing, setImporting] = useState(false);
+  // The date the map shows. The timeline moves it into the past (view only) or the future (to plan).
+  const [day, setDay] = useState(initial.today);
+  const mode: "past" | "today" | "future" = day === data.today ? "today" : day < data.today ? "past" : "future";
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -37,6 +41,15 @@ export function GardenView({ initial }: { initial: GardenData }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // A link like /garden?day=2027-05-01 opens the timeline on that date.
+  useEffect(() => {
+    const asked = new URLSearchParams(window.location.search).get("day");
+    if (asked && /^\d{4}-\d{2}-\d{2}$/.test(asked) && !Number.isNaN(Date.parse(`${asked}T12:00:00Z`))) {
+      const { start, end } = timelineRange(initial.today, initial.plantings);
+      setDay(asked < start ? start : asked > end ? end : asked);
+    }
+  }, [initial.today, initial.plantings]);
 
   useEffect(() => {
     if (!notice) return;
@@ -65,9 +78,26 @@ export function GardenView({ initial }: { initial: GardenData }) {
 
   const advice = useMemo(() => {
     const map = new Map<string, ReturnType<typeof adviseBed>>();
-    for (const bed of data.beds) map.set(bed.id, adviseBed(bed, data.plantings, data.today));
+    for (const bed of data.beds) map.set(bed.id, adviseBed(bed, data.plantings, day, data.today));
     return map;
-  }, [data.beds, data.plantings, data.today]);
+  }, [data.beds, data.plantings, day, data.today]);
+
+  // What the plant list sees: the garden as of `day`. Priority tasks are about right now, so they only show today.
+  const shown = useMemo<GardenData>(() => {
+    const end = `${day}T23:59:59`;
+    return {
+      ...data,
+      today: day,
+      tasks: day === data.today ? data.tasks : [],
+      sessions: data.sessions.filter((session) => session.start.slice(0, 19) <= end),
+      photos: data.photos.filter((photo) => photo.taken_at.slice(0, 19) <= end),
+    };
+  }, [data, day]);
+
+  function showDay(next: string) {
+    setDay(next);
+    if (next < data.today) setEditing(false);
+  }
 
   const selected = data.beds.find((bed) => bed.id === selectedId) ?? null;
 
@@ -80,15 +110,16 @@ export function GardenView({ initial }: { initial: GardenData }) {
 
   function plan(bedId: string, crop: string) {
     const bed = data.beds.find((item) => item.id === bedId);
-    if (!bed) return;
+    if (!bed || mode === "past") return;
     const rec: Recommendation | undefined = advice.get(bedId)?.recommendations.find((item) => item.crop === crop);
     const avoided = advice.get(bedId)?.avoid.find((item) => item.crop === crop);
     if (avoided && !window.confirm(`${avoided.reason} Plan ${crop} here anyway?`)) return;
-    const date = rec?.plantOn ?? advice.get(bedId)?.freeFrom ?? data.today;
+    const best = rec?.plantOn ?? advice.get(bedId)?.freeFrom ?? day;
+    const date = best > data.today ? best : addOne(data.today);
     run(async () => {
-      await send("/api/plantings", "POST", { bed_id: bedId, crop, planted_date: date > data.today ? date : addOne(data.today) });
+      await send("/api/plantings", "POST", { bed_id: bedId, crop, planted_date: date });
       setSelectedId(bedId);
-      setNotice(`Planned ${crop} for ${bed.name}.`);
+      setNotice(`Planned ${crop} for ${bed.name} on ${new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}.`);
     });
   }
 
@@ -115,19 +146,23 @@ export function GardenView({ initial }: { initial: GardenData }) {
             className={editing ? "pill on" : "pill"}
             onClick={() => setEditing((value) => !value)}
             aria-pressed={editing}
+            disabled={mode === "past"}
+            title={mode === "past" ? "Go back to today to change the layout" : undefined}
           >
             {editing ? "Done editing" : "Edit layout"}
           </button>
         </div>
       </header>
       {error ? <p className="banner">{error}</p> : null}
+      <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
       <div className="garden-workspace">
         <GardenMap
           layout={data.layout}
           beds={data.beds}
           plantings={data.plantings}
-          tasks={data.tasks}
+          tasks={shown.tasks}
           today={data.today}
+          day={day}
           sprites={data.sprites}
           selectedId={selectedId}
           editing={editing}
@@ -149,7 +184,8 @@ export function GardenView({ initial }: { initial: GardenData }) {
           }
         />
         <PlantList
-          data={data}
+          data={shown}
+          mode={mode}
           advice={advice}
           selected={selected}
           editing={editing}

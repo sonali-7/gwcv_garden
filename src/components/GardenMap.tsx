@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { spriteDataUrl, spriteUrl, TILES } from "@/lib/pixel-sprites";
 import { fromFt, gridStepFt, showSize, toFt, type Units } from "@/lib/units";
-import { isActive } from "@/lib/plantings";
+import { inGroundOn, plannedAfter } from "@/lib/plantings";
 import type { Bed, GardenLayout, Planting, Task } from "@/lib/types";
 
 type Geometry = NonNullable<Bed["geometry"]>;
@@ -29,6 +29,8 @@ export function GardenMap(props: {
   plantings: Planting[];
   tasks: Task[];
   today: string;
+  /** The date shown, from the timeline. */
+  day: string;
   sprites: Record<string, string>;
   selectedId: string | null;
   editing: boolean;
@@ -65,7 +67,7 @@ export function GardenMap(props: {
   const legend = new Map<string, string>();
   for (const bed of beds) {
     for (const p of props.plantings) {
-      if (p.bed_id === bed.id && isActive(p, props.today) && !legend.has(p.crop)) legend.set(p.crop, spriteUrl(p.crop, props.sprites));
+      if (p.bed_id === bed.id && inGroundOn(p, props.day, props.today) && !legend.has(p.crop)) legend.set(p.crop, spriteUrl(p.crop, props.sprites));
     }
   }
 
@@ -246,9 +248,9 @@ export function GardenMap(props: {
         </div>
         {beds.map((bed) => {
           const g = drag?.id === bed.id ? drag.current : bed.geometry;
-          const current = props.plantings.filter((p) => p.bed_id === bed.id && isActive(p, props.today));
+          const current = props.plantings.filter((p) => p.bed_id === bed.id && inGroundOn(p, props.day, props.today));
           const planned = props.plantings
-            .filter((p) => p.bed_id === bed.id && p.planted_date > props.today && !p.removed_date)
+            .filter((p) => p.bed_id === bed.id && plannedAfter(p, props.day, props.today))
             .sort((a, b) => a.planted_date.localeCompare(b.planted_date));
           const crop = current[0]?.crop ?? null;
           const shownCrops = [...new Set((current.length ? current : planned.slice(0, 1)).map((p) => p.crop))];
@@ -302,7 +304,7 @@ export function GardenMap(props: {
               }}
               onPointerDown={(event) => startDrag(event, bed, "move")}
               onDragOver={(event) => {
-                if (!event.dataTransfer.types.includes(CROP_MIME)) return;
+                if (!event.dataTransfer.types.includes(CROP_MIME) || props.day < props.today) return;
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "copy";
                 setDropId(bed.id);
@@ -427,7 +429,10 @@ export function GardenMap(props: {
           </div>
         ) : (
           <p className="map-hint">
-            {showSize(layout.widthFt, layout.lengthFt, units)} · click a bed for details, drag a suggestion onto a bed to plan it
+            {showSize(layout.widthFt, layout.lengthFt, units)} ·{" "}
+            {props.day < props.today
+              ? "looking back: this is what was in each bed on that day"
+              : "click a bed for details, drag a suggestion onto a bed to plan it"}
           </p>
         )}
       </div>
