@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { DropChoice } from "@/components/DropChoice";
 import { GardenMap } from "@/components/GardenMap";
 import { GardenTimeline, timelineRange } from "@/components/GardenTimeline";
 import { PlantList } from "@/components/PlantList";
 import { SketchImport } from "@/components/SketchImport";
 import { ViewTabs } from "@/components/ViewTabs";
 import type { GardenData } from "@/lib/garden-data";
-import { adviseBed, type Recommendation } from "@/lib/recommend";
+import { clearing, dropSituation, replacementDate, type Occupant } from "@/lib/drop-plan";
+import { adviseBed, guideFor, type Recommendation } from "@/lib/recommend";
 import type { Bed, GardenLayout } from "@/lib/types";
 
 async function send<T>(url: string, method: string, body?: unknown): Promise<T | null> {
@@ -32,6 +34,8 @@ export function GardenView({ initial }: { initial: GardenData }) {
   const [importing, setImporting] = useState(false);
   // The date the map shows. The timeline moves it into the past (view only) or the future (to plan).
   const [day, setDay] = useState(initial.today);
+  // A crop dropped on a patch that already has something established in it (or several crops), waiting for a choice.
+  const [dropping, setDropping] = useState<{ bedId: string; crop: string; there: Occupant[] } | null>(null);
   const mode: "past" | "today" | "future" = day === data.today ? "today" : day < data.today ? "past" : "future";
 
   useEffect(() => {
@@ -130,6 +134,46 @@ export function GardenView({ initial }: { initial: GardenData }) {
     });
   }
 
+  /**
+   * Dropping a crop on a patch, as of the timeline date: an empty patch gets it planned as usual; a single crop that
+   * hasn't been in the ground a full day is swapped without asking; anything else asks (replace, after, alongside).
+   */
+  function dropCrop(bedId: string, crop: string) {
+    if (mode === "past") return;
+    const situation = dropSituation(bedId, data.plantings, day, data.today);
+    if (situation.kind === "empty") plan(bedId, crop, "after");
+    else if (situation.kind === "replace") replace(bedId, crop, [situation.old.id]);
+    else setDropping({ bedId, crop, there: situation.there });
+  }
+
+  /** Swap crops out of a patch: fresh plans are deleted, anything real or established is marked pulled. */
+  function replace(bedId: string, crop: string, plantingIds: string[]) {
+    const bed = data.beds.find((item) => item.id === bedId);
+    const old = data.plantings.filter((p) => plantingIds.includes(p.id));
+    if (!bed || !old.length) return;
+    const steps = old.map((p) => ({ planting: p, how: clearing(p, day, data.today) }));
+    // Rotation is checked as if the deleted plans had never been there.
+    const deleted = new Set(steps.filter((s) => s.how.action === "delete").map((s) => s.planting.id));
+    const avoided = adviseBed(bed, data.plantings.filter((p) => !deleted.has(p.id)), day, data.today).avoid.find((item) => item.crop === crop);
+    if (avoided && !window.confirm(`${avoided.reason} Plant ${crop} here anyway?`)) return;
+    const date = replacementDate(old, day, data.today, guideFor(crop)?.sowMonths);
+    const swapped = [...new Set(old.map((p) => p.crop))].join(" and ");
+    run(async () => {
+      for (const { planting, how } of steps) {
+        if (how.action === "delete") await send(`/api/plantings/${planting.id}`, "DELETE");
+        else await send(`/api/plantings/${planting.id}`, "PATCH", { removed_date: how.on });
+      }
+      await send("/api/plantings", "POST", { bed_id: bedId, crop, planted_date: date });
+      setSelectedId(bedId);
+      setNotice(`Replaced the ${swapped} in ${bed.name} with ${crop}, from ${longDate(date)}.`);
+    });
+  }
+
+  const dropBed = dropping ? data.beds.find((bed) => bed.id === dropping.bedId) : null;
+  const dropRec = dropping ? advice.get(dropping.bedId)?.recommendations.find((item) => item.crop === dropping.crop) : undefined;
+  const tomorrow = addOne(data.today);
+  const notBeforeTomorrow = (d: string) => (d > data.today ? d : tomorrow);
+
   return (
     <div className="app garden-app">
       <header className="top">
@@ -177,7 +221,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
           busy={busy}
           onSelect={setSelectedId}
           onMove={moveBed}
-          onDropCrop={plan}
+          onDropCrop={dropCrop}
           onImport={() => setImporting(true)}
           onAddBed={() =>
             run(async () => {
@@ -220,6 +264,42 @@ export function GardenView({ initial }: { initial: GardenData }) {
           }
         />
       </div>
+      {dropping && dropBed ? (
+        <DropChoice
+          key={`${dropping.bedId}-${dropping.crop}`}
+          bedName={dropBed.name}
+          crop={dropping.crop}
+          there={dropping.there}
+          sprites={data.sprites}
+          busy={busy}
+          dates={{
+            replace: replacementDate(
+              dropping.there.map((o) => o.planting),
+              day,
+              data.today,
+              guideFor(dropping.crop)?.sowMonths,
+            ),
+            after: notBeforeTomorrow(dropRec?.plantOn ?? advice.get(dropping.bedId)?.freeFrom ?? day),
+            alongside: notBeforeTomorrow(dropRec?.alongsideOn ?? day),
+          }}
+          onReplace={(ids) => {
+            const { bedId, crop } = dropping;
+            setDropping(null);
+            replace(bedId, crop, ids);
+          }}
+          onAfter={() => {
+            const { bedId, crop } = dropping;
+            setDropping(null);
+            plan(bedId, crop, "after");
+          }}
+          onAlongside={() => {
+            const { bedId, crop } = dropping;
+            setDropping(null);
+            plan(bedId, crop, "alongside");
+          }}
+          onCancel={() => setDropping(null)}
+        />
+      ) : null}
       <SketchImport
         open={importing}
         layout={data.layout}
@@ -245,4 +325,8 @@ function addOne(day: string): string {
   const date = new Date(`${day}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
+}
+
+function longDate(day: string): string {
+  return new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 }
