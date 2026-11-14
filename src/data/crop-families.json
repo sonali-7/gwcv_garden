@@ -1,49 +1,95 @@
 [
   {
     "family": "nightshade",
-    "crops": ["tomato", "tomatoes", "potato", "pepper", "eggplant"],
+    "crops": [
+      "tomato",
+      "tomatoes",
+      "potato",
+      "pepper",
+      "eggplant"
+    ],
     "nitrogenFixer": false,
     "feeder": "heavy"
   },
   {
     "family": "brassica",
-    "crops": ["cabbage", "kale", "broccoli", "collards"],
+    "crops": [
+      "cabbage",
+      "kale",
+      "broccoli",
+      "collards"
+    ],
     "nitrogenFixer": false,
     "feeder": "heavy"
   },
   {
     "family": "legume",
-    "crops": ["beans", "peas", "clover"],
+    "crops": [
+      "beans",
+      "peas",
+      "clover"
+    ],
     "nitrogenFixer": true,
     "feeder": "light"
   },
   {
     "family": "umbellifer",
-    "crops": ["carrot", "carrots", "parsley", "dill"],
+    "crops": [
+      "carrot",
+      "carrots",
+      "parsley",
+      "dill"
+    ],
     "nitrogenFixer": false,
     "feeder": "light"
   },
   {
     "family": "morning glory",
-    "crops": ["sweet potato", "sweet potatoes"],
+    "crops": [
+      "sweet potato",
+      "sweet potatoes"
+    ],
     "nitrogenFixer": false,
     "feeder": "light"
   },
   {
     "family": "amaranth",
-    "crops": ["spinach", "chard", "beet", "lettuce"],
+    "crops": [
+      "spinach",
+      "chard",
+      "beet",
+      "lettuce",
+      "beets"
+    ],
     "nitrogenFixer": false,
     "feeder": "medium"
   },
   {
     "family": "grass",
-    "crops": ["corn"],
+    "crops": [
+      "corn",
+      "winter rye"
+    ],
     "nitrogenFixer": false,
     "feeder": "heavy"
   },
   {
+    "family": "allium",
+    "crops": [
+      "garlic",
+      "onion",
+      "onions",
+      "leeks"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "light"
+  },
+  {
     "family": "woody",
-    "crops": ["tree", "trees"],
+    "crops": [
+      "tree",
+      "trees"
+    ],
     "nitrogenFixer": false,
     "feeder": "light"
   }

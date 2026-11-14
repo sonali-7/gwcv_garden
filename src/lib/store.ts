@@ -8,6 +8,7 @@ import type {
   ThreadMessage,
   WorkSession,
   Bed,
+  GardenLayout,
 } from "./types";
 import { blankConversation } from "./types";
 
@@ -19,6 +20,11 @@ export interface Store {
   getPersonByPhone(phone: string): Promise<Person | null>;
   insertPerson(person: Person): Promise<void>;
   listBeds(): Promise<Bed[]>;
+  insertBed(bed: Bed): Promise<void>;
+  updateBed(bed: Bed): Promise<void>;
+  deleteBed(id: string): Promise<void>;
+  getLayout(): Promise<GardenLayout>;
+  saveLayout(layout: GardenLayout): Promise<void>;
   listPlantings(): Promise<Planting[]>;
   insertPlanting(planting: Planting): Promise<void>;
   updatePlanting(planting: Planting): Promise<void>;

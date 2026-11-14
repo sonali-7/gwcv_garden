@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { buildTasks } from "./priority";
 import { sentence, workPhrase } from "./phrases";
 import { addDays, DEFAULT_TZ, startOfWeekYmd, todayYmd, whenPhrase, zonedToUtc } from "./time";
-import type { Bed, DatabaseShape, Person, Planting, ThreadMessage, WorkSession } from "./types";
+import { defaultLayout, type Bed, type DatabaseShape, type Person, type Planting, type ThreadMessage, type WorkSession } from "./types";
 
 export function buildSeed(now: Date, timeZone = DEFAULT_TZ): DatabaseShape {
   const today = todayYmd(now, timeZone);
@@ -20,11 +20,11 @@ export function buildSeed(now: Date, timeZone = DEFAULT_TZ): DatabaseShape {
   ];
 
   const beds: Bed[] = [
-    { id: "bed-sp", name: "Sweet potato row", row: "south", geometry: null },
-    { id: "bed-carrot", name: "Carrot row", row: "east", geometry: null },
-    { id: "bed-cabbage", name: "Cabbage row", row: "west", geometry: null },
-    { id: "bed-x", name: "Space X", row: "center", geometry: null },
-    { id: "bed-north", name: "North border", row: "north", geometry: null },
+    { id: "bed-sp", name: "Sweet potato row", row: "south", geometry: { x: 12, y: 10, w: 25, h: 5 } },
+    { id: "bed-carrot", name: "Carrot row", row: "east", geometry: { x: 2, y: 10, w: 8, h: 8 } },
+    { id: "bed-cabbage", name: "Cabbage row", row: "west", geometry: { x: 2, y: 20, w: 8, h: 8 } },
+    { id: "bed-x", name: "Space X", row: "center", geometry: { x: 12, y: 17, w: 12, h: 11 } },
+    { id: "bed-north", name: "North border", row: "north", geometry: { x: 2, y: 1.5, w: 36, h: 6 } },
   ];
 
   const plantings: Planting[] = [
@@ -38,6 +38,8 @@ export function buildSeed(now: Date, timeZone = DEFAULT_TZ): DatabaseShape {
     planting("planting-2025-carrot", "bed-carrot", "lettuce", "2025-04-15", 45, "2025-06-20"),
     planting("planting-2024-cabbage", "bed-cabbage", "corn", "2024-05-20", 80, "2024-09-01"),
     planting("planting-2025-cabbage", "bed-cabbage", "peas", "2025-04-01", 60, "2025-06-15"),
+    planting("planting-2024-x", "bed-x", "beans", "2024-05-15", 60, "2024-08-01"),
+    planting("planting-2025-x", "bed-x", "tomatoes", "2025-05-20", 80, "2025-09-25"),
   ];
 
   const sessions: WorkSession[] = [
@@ -253,6 +255,7 @@ export function buildSeed(now: Date, timeZone = DEFAULT_TZ): DatabaseShape {
     conversations: {},
     demoPhones: [],
     seenEvents: [],
+    layout: defaultLayout(),
   };
 }
 

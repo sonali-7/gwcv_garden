@@ -1,7 +1,7 @@
 import { MongoClient, type Collection, type Db, type Document } from "mongodb";
 import { buildSeed } from "./seed";
 import { rememberedConversation, type Store } from "./store";
-import { blankConversation, type Conversation, type DatabaseShape, type ThreadMessage } from "./types";
+import { blankConversation, defaultLayout, type Conversation, type DatabaseShape, type GardenLayout, type ThreadMessage } from "./types";
 
 type Meta = { demoPhones: string[]; seenEvents: string[] };
 type Row = Document & { _id: string };
@@ -52,6 +52,7 @@ export function createMongoStore(uri: string, dbName: string): ConnectedStore {
         rows(db, "conversations").find({}).toArray(),
         meta(db),
       ]);
+      const layout = await readLayout(db);
       return {
         people,
         beds,
@@ -68,6 +69,7 @@ export function createMongoStore(uri: string, dbName: string): ConnectedStore {
         ),
         demoPhones: info.demoPhones,
         seenEvents: info.seenEvents,
+        layout,
       } as DatabaseShape;
     },
     async replaceAll(data) {
@@ -90,6 +92,21 @@ export function createMongoStore(uri: string, dbName: string): ConnectedStore {
     },
     async listBeds() {
       return docs(await database(), "beds");
+    },
+    async insertBed(bed) {
+      await rows(await database(), "beds").insertOne({ ...bed, _id: bed.id });
+    },
+    async updateBed(bed) {
+      await rows(await database(), "beds").replaceOne({ _id: bed.id }, { ...bed, _id: bed.id });
+    },
+    async deleteBed(id) {
+      await rows(await database(), "beds").deleteOne({ _id: id });
+    },
+    async getLayout() {
+      return readLayout(await database());
+    },
+    async saveLayout(layout) {
+      await rows(await database(), "gardenConfig").replaceOne({ _id: "layout" }, { _id: "layout", ...layout }, { upsert: true });
     },
     async listPlantings() {
       return docs(await database(), "plantings");
@@ -174,7 +191,7 @@ export function createMongoStore(uri: string, dbName: string): ConnectedStore {
 }
 
 async function writeAll(db: Db, data: DatabaseShape): Promise<void> {
-  const collections = ["people", "beds", "plantings", "workSessions", "photos", "tasks", "threads", "conversations", "meta"];
+  const collections = ["gardenConfig", "people", "beds", "plantings", "workSessions", "photos", "tasks", "threads", "conversations", "meta"];
   for (const name of collections) await rows(db, name).deleteMany({});
   if (data.people.length) await rows(db, "people").insertMany(data.people.map((item) => ({ ...item, _id: item.id })));
   if (data.beds.length) await rows(db, "beds").insertMany(data.beds.map((item) => ({ ...item, _id: item.id })));
@@ -194,6 +211,7 @@ async function writeAll(db: Db, data: DatabaseShape): Promise<void> {
   if (conversations.length) {
     await rows(db, "conversations").insertMany(conversations.map(([phone, conversation]) => ({ ...conversation, _id: phone })));
   }
+  await rows(db, "gardenConfig").insertOne({ _id: "layout", ...(data.layout ?? defaultLayout()) });
   await rows(db, "meta").insertOne({
     _id: "meta",
     demoPhones: data.demoPhones,
@@ -214,4 +232,9 @@ async function one<T>(db: Db, name: string, id: string): Promise<T | null> {
 function strip<T>(row: Record<string, unknown>): T {
   const { _id, ...rest } = row;
   return rest as T;
+}
+
+async function readLayout(db: Db): Promise<GardenLayout> {
+  const row = await rows(db, "gardenConfig").findOne({ _id: "layout" });
+  return row ? { ...defaultLayout(), ...strip<Partial<GardenLayout>>(row) } : defaultLayout();
 }

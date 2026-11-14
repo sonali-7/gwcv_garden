@@ -2,7 +2,7 @@
 
 The people side of the community garden app: a weekly calendar of who did the work, a priority list, and a text thread that writes both.
 
-The garden map and plant list belong to the other half of the project. This app exposes the shared records those views can read.
+It also has a garden view at [/garden](http://localhost:3000/garden): the garden drawn to scale, what's in each bed, and rotation-aware ideas for what to plant next. The two views share the same records, so a planting someone texts in shows up on the map.
 
 ## Run it
 
@@ -94,3 +94,18 @@ Photon replies are capped at 12 texts per sender per day. Phone numbers stay in 
 ## Not in this slice
 
 The garden map, plant recommendations, and the weekly planner that assigns volunteers are separate. Crop families are available at `/api/crop-families` for that planner. Nothing here texts a volunteer unless they texted first, or a Photon webhook is delivering their own message.
+
+## Garden view
+
+Open [/garden](http://localhost:3000/garden), or use the Garden / Calendar tabs.
+
+- Beds are drawn to scale in feet over a 5 ft grid. Colors follow crop family (sweet potato red, cabbage purple, carrots blue, trees green). Dashed beds are open or only planned. A red triangle or orange square on a bed mirrors the priority list.
+- Click a bed to see what's growing, when it was last watered and by whom, past seasons, recent work, and photos from texts.
+- **Suggestions** come from fixed rules in `src/lib/recommend.ts` (no LLM). The rules are: don't repeat a family grown in this bed this season or last, follow a heavy feeder with a nitrogen fixer, and prefer crops whose sowing window is open once the bed is free. Sowing months, water, sun, and soil live in `src/data/crop-guide.json` and are set for a zone 6b/7a garden. Edit them for yours.
+- **Add to plan** (or drag a suggestion card onto any bed) creates a planned planting dated to its sowing window. When someone later texts `planted garlic in space x`, the plan becomes the real planting. A bed with something planned drops off the "Fill" priority.
+- **Edit layout** lets you drag beds to move them, drag the corner to resize, add, rename, or remove beds, set the garden's width and length, and set a town for the "Find seeds nearby" links.
+- **Upload photo** puts a photo or aerial shot of the garden behind the beds so you can trace them.
+
+Demo: click **Space X**. Tomatoes grew there in 2025, so nightshades are skipped. Garlic and winter rye can go in now (November), and clover is suggested to put nitrogen back. Click **Add to plan** on garlic, then text as Sonali `from 9-10am I planted garlic in space x`.
+
+New endpoints: `GET /api/garden`, `GET|PUT /api/layout`, `POST /api/beds`, `PATCH|DELETE /api/beds/:id`, `POST /api/plantings`, `DELETE /api/plantings/:id` (planned only).
