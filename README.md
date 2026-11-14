@@ -119,7 +119,7 @@ Open [/garden](http://localhost:3000/garden), or use the Garden / Calendar tabs.
   - Detection tries a few line sensitivities and keeps the one that finds the most beds. The slider overrides it. Any labeled bed it still misses, Gemini adds as a dashed box for you to check.
   - "Replace" archives old beds that have planting history (off the map, history kept) instead of deleting them.
   - The map can show meters: Edit layout → units. Sizes are stored in feet either way.
-- **Upload photo** puts a photo or aerial shot of the garden behind the beds so you can trace them.
+- **Ideas from Gemini** in a bed's panel: press **Ask Gemini** and it suggests four crops for the date on the timeline, picked for the month and season near your town (set **Near** in Edit layout), and for how they get on with what's in and next to the bed. The server drops anything from a family rotation rules out there; crops the app doesn't know are marked "new to this app". The date on each card comes from the app's crop guide, which is what gets planned. It only asks when you press the button (answers are kept per bed and date until you reload), to save the daily quota (`src/lib/bed-ideas.ts`, `POST /api/beds/:id/ideas`).
 
 Demo: click **Space X**. Tomatoes grew there in 2025, so nightshades are skipped. Garlic and winter rye can go in now (November), and clover is suggested to put nitrogen back. Click **Add to plan** on garlic, then text as Sonali `from 9-10am I planted garlic in space x`.
 
