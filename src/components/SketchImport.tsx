@@ -168,7 +168,7 @@ export function SketchImport(props: {
     }
   }
 
-  /** Number the beds and letter the outline's sides on a copy, then ask Claude to read both. */
+  /** Number the beds and letter the outline's sides on a copy, then ask Gemini to read both. */
   async function readLabels() {
     if (!img || !detection || !detection.beds.length) return;
     setReading("busy");
@@ -534,7 +534,7 @@ export function SketchImport(props: {
             </p>
             {reading === "off" ? (
               <p className="sketch-note">
-                Type the names in. To read handwriting and sizes automatically, add <code>ANTHROPIC_API_KEY</code> to <code>.env</code>.
+                Type the names in. To read handwriting and sizes automatically, add <code>GEMINI_API_KEY</code> to <code>.env.local</code>.
               </p>
             ) : null}
 

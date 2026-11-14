@@ -79,6 +79,8 @@ MONGODB_URI=
 MONGODB_DB=gwcv_garden
 ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-sonnet-4-5
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.8-flash
 PHOTON_API_KEY=
 PHOTON_PROJECT_ID=
 PHOTON_WEBHOOK_SECRET=
@@ -105,9 +107,9 @@ Open [/garden](http://localhost:3000/garden), or use the Garden / Calendar tabs.
 - **Suggestions** come from fixed rules in `src/lib/recommend.ts` (no LLM). The rules are: don't repeat a family grown in this bed this season or last, follow a heavy feeder with a nitrogen fixer, and prefer crops whose sowing window is open once the bed is free. Sowing months, water, sun, and soil live in `src/data/crop-guide.json` and are set for a zone 6b/7a garden. Edit them for yours.
 - **Add to plan** (or drag a suggestion card onto any bed) creates a planned planting dated to its sowing window. When someone later texts `planted garlic in space x`, the plan becomes the real planting. A bed with something planned drops off the "Fill" priority.
 - **Edit layout** lets you drag beds to move them, drag the corner to resize, add, rename, or remove beds, set the garden's width and length, and set a town for the "Find seeds nearby" links.
-- **Import drawing** builds the garden from a hand-drawn plan. Draw each bed as a closed box (or a solid block of color) on plain paper, draw a box around the whole garden for scale, write names or crops inside, and photograph it. The browser finds the boxes itself (`src/lib/sketch-detect.ts`, no AI): it uses the outer box as the garden's edge and splits L-shaped beds into two rectangles. If `ANTHROPIC_API_KEY` is set, Claude reads the handwriting to fill in names, crops, and the garden size (`src/lib/sketch-labels.ts`). Without a key, you type the names. You review everything before it's saved. A drawn bed with the same name as an existing one moves that bed and keeps its history. "Replace" never deletes a bed that has planting history. There's a sample drawing in `public/sample-garden-drawing.png`.
-  - It also handles real plans: odd-shaped or curved garden edges (the map draws that shape), beds that the edge line cuts through, dozens of thin labeled beds, beds with several crops ("Kale / Peas" shows both, alternating), and sizes in meters written along the edges. Claude is told which lettered side each "7 m" belongs to, and the scale comes from the median of all of them.
-  - Detection tries a few line sensitivities and keeps the one that finds the most beds. The slider overrides it. Any labeled bed it still misses, Claude adds as a dashed box for you to check.
+- **Import drawing** builds the garden from a hand-drawn plan. Draw each bed as a closed box (or a solid block of color) on plain paper, draw a box around the whole garden for scale, write names or crops inside, and photograph it. The browser finds the boxes itself (`src/lib/sketch-detect.ts`, no AI): it uses the outer box as the garden's edge and splits L-shaped beds into two rectangles. If `GEMINI_API_KEY` is set, Gemini reads the handwriting to fill in names, crops, and the garden size (`src/lib/sketch-labels.ts`). Without a key, you type the names. You review everything before it's saved. A drawn bed with the same name as an existing one moves that bed and keeps its history. "Replace" never deletes a bed that has planting history. There's a sample drawing in `public/sample-garden-drawing.png`.
+  - It also handles real plans: odd-shaped or curved garden edges (the map draws that shape), beds that the edge line cuts through, dozens of thin labeled beds, beds with several crops ("Kale / Peas" shows both, alternating), and sizes in meters written along the edges. Gemini is told which lettered side each "7 m" belongs to, and the scale comes from the median of all of them.
+  - Detection tries a few line sensitivities and keeps the one that finds the most beds. The slider overrides it. Any labeled bed it still misses, Gemini adds as a dashed box for you to check.
   - "Replace" archives old beds that have planting history (off the map, history kept) instead of deleting them.
   - The map can show meters: Edit layout → units. Sizes are stored in feet either way.
 - **Upload photo** puts a photo or aerial shot of the garden behind the beds so you can trace them.

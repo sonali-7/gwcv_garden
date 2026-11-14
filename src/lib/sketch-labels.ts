@@ -7,7 +7,7 @@ export type EdgeDimension = { edge: string; value: number; unit: "m" | "ft" };
 export type SketchLabels = {
   ai: boolean;
   beds: LabeledBed[];
-  /** Beds Claude can see that have no numbered box, with a rough box as fractions of the image (x0, y0, x1, y1). */
+  /** Beds the model can see that have no numbered box, with a rough box as fractions of the image (x0, y0, x1, y1). */
   missed: MissedBed[];
   /** Measurements written along the lettered sides of the garden's outline. */
   dimensions: EdgeDimension[];
@@ -36,35 +36,56 @@ Reply with JSON only:
 
 type Image = { base64: string; mime: string };
 
-/** Ask Claude to read a drawing. Returns ai:false (and nothing read) without an API key or on any failure. */
+const READ_TIMEOUT_MS = 60_000;
+
+/**
+ * Ask Gemini to read a drawing. Returns ai:false (and nothing read) when there's no API key.
+ * Throws a short, user-facing message when Gemini fails, is out of quota, or takes too long.
+ */
 export async function readSketchLabels(original: Image, marked: Image, count: number, edges: string[]): Promise<SketchLabels> {
   const empty: SketchLabels = { ai: false, beds: [], missed: [], dimensions: [], units: null, widthFt: null, lengthFt: null };
-  const key = process.env.ANTHROPIC_API_KEY;
+  const key = process.env.GEMINI_API_KEY;
   if (!key || count < 1) return empty;
+  const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  const started = Date.now();
+  let response: Response;
   try {
-    const { default: Anthropic } = await import("@anthropic-ai/sdk");
-    const client = new Anthropic({ apiKey: key });
-    const result = await client.messages.create({
-      model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
-      max_tokens: 4000,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: original.mime as "image/jpeg", data: original.base64 } },
-            { type: "image", source: { type: "base64", media_type: marked.mime as "image/jpeg", data: marked.base64 } },
-            { type: "text", text: PROMPT(count, edges) },
-          ],
-        },
-      ],
+    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inline_data: { mime_type: original.mime, data: original.base64 } },
+              { inline_data: { mime_type: marked.mime, data: marked.base64 } },
+              { text: PROMPT(count, edges) },
+            ],
+          },
+        ],
+        generationConfig: { maxOutputTokens: 8000, responseMimeType: "application/json" },
+      }),
     });
-    const block = result.content.find((item) => item.type === "text");
-    if (!block || block.type !== "text") return empty;
-    return { ...parseLabels(block.text, count, edges), ai: true };
   } catch (error) {
-    console.error("[sketch] couldn't read labels", error);
-    return empty;
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    console.error(`[sketch] ${model} ${timedOut ? "timed out" : "failed"} after ${Date.now() - started}ms`, timedOut ? "" : error);
+    throw new Error(timedOut ? `Gemini (${model}) took over ${READ_TIMEOUT_MS / 1000} seconds. Try again, or set GEMINI_MODEL to a faster model.` : "Couldn't reach Gemini.");
   }
+  if (!response.ok) {
+    const detail = await response.text();
+    console.error(`[sketch] ${model} returned ${response.status} after ${Date.now() - started}ms`, detail.slice(0, 500));
+    if (response.status === 429) throw new Error(`Gemini's request limit for ${model} is used up. Try later or pick another GEMINI_MODEL.`);
+    if (response.status === 404) throw new Error(`Gemini doesn't offer the model "${model}" to this key. Check GEMINI_MODEL.`);
+    if (response.status === 400 || response.status === 403) throw new Error("Gemini rejected the request. Check GEMINI_API_KEY.");
+    throw new Error(`Gemini returned an error (${response.status}).`);
+  }
+  const result = (await response.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+  const text = (result.candidates?.[0]?.content?.parts ?? []).map((part) => part.text ?? "").join("");
+  console.log(`[sketch] ${model} read ${count} beds in ${Date.now() - started}ms`);
+  if (!text) throw new Error("Gemini sent back an empty answer. Try again.");
+  return { ...parseLabels(text, count, edges), ai: true };
 }
 
 function cleanCrops(value: unknown): string[] {

@@ -26,5 +26,9 @@ export async function POST(request: Request) {
   if (!original || !marked || !Number.isInteger(count) || count < 1 || count > 80) {
     return json({ error: "Send the drawing and the marked-up copy." }, 400);
   }
-  return json(await readSketchLabels(original, marked, count, edges));
+  try {
+    return json(await readSketchLabels(original, marked, count, edges));
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "Couldn't read the drawing." }, 502);
+  }
 }
