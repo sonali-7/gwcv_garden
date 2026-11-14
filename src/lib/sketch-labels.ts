@@ -1,5 +1,5 @@
 import { canonicalCrop, familyOf } from "./crops";
-import { geminiModels, geminiText } from "./gemini";
+import { explainGeminiError, geminiModels, geminiText } from "./gemini";
 
 export type LabeledBed = { n: number; name: string | null; crops: string[]; skip: boolean };
 export type MissedBed = { name: string; crops: string[]; box: [number, number, number, number] };
@@ -64,24 +64,13 @@ export async function readSketchLabels(original: Image, marked: Image, count: nu
     );
   } catch (error) {
     console.error(`[sketch] ${models} failed after ${Date.now() - started}ms:`, error instanceof Error ? error.message : error);
-    throw new Error(friendlyError(error, models));
+    throw new Error(explainGeminiError(error));
   }
   console.log(`[sketch] ${models} read ${count} beds in ${Date.now() - started}ms`);
   if (!text?.trim()) throw new Error("Gemini sent back an empty answer. Try again.");
   return { ...parseLabels(text, count, edges), ai: true };
 }
 
-function friendlyError(error: unknown, models: string): string {
-  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-    return `Gemini (${models}) took too long. Try again, or set GEMINI_MODEL to a faster model.`;
-  }
-  const status = Number(/Gemini (\d+)/.exec(error instanceof Error ? error.message : "")?.[1]);
-  if (status === 429) return `Gemini's request limit is used up (${models}). Try later or pick another GEMINI_MODEL.`;
-  if (status === 404) return `Gemini doesn't offer "${models}" to this key. Check GEMINI_MODEL.`;
-  if (status === 400 || status === 403) return "Gemini rejected the request. Check GEMINI_API_KEY.";
-  if (status) return `Gemini returned an error (${status}).`;
-  return "Couldn't reach Gemini.";
-}
 
 function cleanCrops(value: unknown): string[] {
   const list = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
