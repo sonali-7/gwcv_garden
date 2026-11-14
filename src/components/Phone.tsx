@@ -5,6 +5,7 @@ import type { PublicPerson, ThreadMessage } from "@/lib/types";
 
 const SUGGESTIONS = [
   "from 8-9 I planted trees",
+  "harvested carrots from the carrot row from 3-4pm",
   "weeded the carrot row for an hour",
   "schedule kumquats from 4-5 today",
   "what's on the schedule this week?",

@@ -13,6 +13,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
   const [week, setWeek] = useState(initial.weekStart);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [phoneOpen, setPhoneOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -21,6 +22,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
       if (event.key === "Escape") {
         setSelectedId(null);
         setTaskId(null);
+        setPhoneOpen(false);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -48,6 +50,18 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
     }
   }
 
+  async function goThisWeek() {
+    setBusy(true);
+    setError("");
+    try {
+      await reload(initial.weekStart);
+    } catch {
+      setError("The week didn't load.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function resetDemo() {
     if (!window.confirm("Reset the demo log back to the sample week?")) return;
     setBusy(true);
@@ -68,9 +82,10 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
   const task = data.tasks.find((item) => item.id === taskId) ?? null;
   const highlightBedId = task?.bed_id ?? selected?.bed_id ?? null;
   const title = useMemo(() => formatWeekTitle(week), [week]);
+  const onThisWeek = week === initial.weekStart;
 
   return (
-    <div className="app">
+    <div className="app calendar-app">
       <header className="top">
         <div className="brand">
           <span className="leaf" aria-hidden="true">
@@ -85,36 +100,46 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
           </div>
           <ViewTabs current="calendar" />
         </div>
-        <div className="week-nav">
-          <button type="button" onClick={() => shift(-7)} disabled={busy} aria-label="Previous week">
-            ‹
-          </button>
-          <div>
-            <strong>{title}</strong>
-            <span>Sun–Sat · 7am–7pm</span>
-          </div>
-          <button type="button" onClick={() => shift(7)} disabled={busy} aria-label="Next week">
-            ›
-          </button>
+        <div className="garden-actions">
           <button
             type="button"
-            className="texty"
-            onClick={() => {
-              setBusy(true);
-              reload(initial.weekStart)
-                .catch(() => setError("The week didn't load."))
-                .finally(() => setBusy(false));
-            }}
-            disabled={busy}
+            className={phoneOpen ? "pill on" : "pill"}
+            aria-expanded={phoneOpen}
+            aria-controls="phone-drawer"
+            onClick={() => setPhoneOpen((open) => !open)}
           >
-            This week
+            {phoneOpen ? "Hide texts" : "Texts"}
+          </button>
+          <button type="button" className="pill" onClick={resetDemo} disabled={busy}>
+            Reset demo
           </button>
         </div>
-        <button type="button" className="texty" onClick={resetDemo} disabled={busy}>
-          Reset demo
-        </button>
       </header>
       {error ? <p className="banner">{error}</p> : null}
+      <section className={`week-bar${onThisWeek ? " current" : ""}`} aria-label="Week">
+        <div className="week-bar-head">
+          <div className="week-bar-date">
+            <strong>{title}</strong>
+            <span>{onThisWeek ? "This week" : "Browsing another week"} · Sun–Sat</span>
+          </div>
+          <div className="week-bar-steps">
+            <button type="button" className="cal-btn" onClick={() => shift(-7)} disabled={busy} aria-label="Previous week">
+              ‹ Week
+            </button>
+            <button
+              type="button"
+              className={onThisWeek ? "cal-btn on" : "cal-btn"}
+              onClick={goThisWeek}
+              disabled={busy || onThisWeek}
+            >
+              This week
+            </button>
+            <button type="button" className="cal-btn" onClick={() => shift(7)} disabled={busy} aria-label="Next week">
+              Week ›
+            </button>
+          </div>
+        </div>
+      </section>
       <div className="workspace">
         <section className="calendar-card">
           <CalendarView
@@ -144,22 +169,40 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
             setSelectedId(null);
           }}
         />
-        <Phone
-          people={data.people}
-          threads={data.threads}
-          newSender={data.newSender}
-          onSent={async (info) => {
-            const target = info.sessionStart
-              ? startOfWeekYmd(new Date(info.sessionStart), data.timezone)
-              : week;
-            const next = await reload(target);
-            if (info.sessionId && next.sessions.some((session) => session.id === info.sessionId)) {
-              setSelectedId(info.sessionId);
-              setTaskId(null);
-            }
-          }}
-        />
       </div>
+      {phoneOpen ? (
+        <>
+          <button
+            type="button"
+            className="phone-scrim"
+            aria-label="Close texts"
+            onClick={() => setPhoneOpen(false)}
+          />
+          <aside id="phone-drawer" className="phone-drawer" aria-label="Text simulator">
+            <header className="phone-drawer-head">
+              <h2>Texts</h2>
+              <button type="button" className="pill" onClick={() => setPhoneOpen(false)}>
+                Close
+              </button>
+            </header>
+            <Phone
+              people={data.people}
+              threads={data.threads}
+              newSender={data.newSender}
+              onSent={async (info) => {
+                const target = info.sessionStart
+                  ? startOfWeekYmd(new Date(info.sessionStart), data.timezone)
+                  : week;
+                const next = await reload(target);
+                if (info.sessionId && next.sessions.some((session) => session.id === info.sessionId)) {
+                  setSelectedId(info.sessionId);
+                  setTaskId(null);
+                }
+              }}
+            />
+          </aside>
+        </>
+      ) : null}
     </div>
   );
 }

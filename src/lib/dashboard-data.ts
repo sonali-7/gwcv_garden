@@ -14,8 +14,9 @@ export async function loadDashboard(store: Store, weekStart: string | null, now 
     store.listSessions(),
     store.listPhotos(),
   ]);
+  // Tasks are derived from plantings/sessions; no need to write them on every page load
+  // (that raced with other tabs on Mongo _id). GET /api/tasks still persists when asked.
   const tasks = buildTasks({ now, beds, plantings, sessions, timeZone });
-  await store.saveTasks(tasks);
 
   const threads: DashboardData["threads"] = {};
   for (const person of people) {

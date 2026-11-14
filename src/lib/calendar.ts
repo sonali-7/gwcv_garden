@@ -2,8 +2,12 @@ import { addDays, partsInZone, ymd, zonedToUtc } from "./time";
 import type { WorkSession } from "./types";
 
 export const HOUR_PX = 46;
-export const DAY_START = 7;
-export const DAY_END = 19;
+/** Full day on the grid; the viewports starts scrolled to VIEW_START. */
+export const DAY_START = 0;
+export const DAY_END = 24;
+/** Hours shown without scrolling (7am–7pm). */
+export const VIEW_START = 6.75;
+export const VIEW_HOURS = 12.5;
 
 export type DaySlice = {
   sessionId: string;

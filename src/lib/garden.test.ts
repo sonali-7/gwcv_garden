@@ -208,7 +208,7 @@ describe("calendar slices", () => {
     const slices = slicesForSession(session, week, DEFAULT_TZ);
     assert.equal(slices.length, 1);
     assert.equal(slices[0].day, "2026-11-12");
-    assert.equal(slices[0].topPx, 46);
+    assert.equal(slices[0].topPx, 8 * 46);
     assert.equal(slices[0].heightPx, 230);
     const eight = zonedToUtc("2026-11-12", 8, 0, DEFAULT_TZ);
     assert.equal(new Date(session.start).toISOString(), eight.toISOString());
@@ -275,6 +275,27 @@ describe("text log", () => {
     assert.ok(kale);
     assert.equal(kale.bed_id, "bed-x");
     assert.equal(kale.source_session_id, logged.session?.id);
+  });
+
+  it("clears the bed after a harvest text, and undo puts the crop back", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const before = (await store.listPlantings()).find((item) => item.id === "planting-carrots");
+    assert.ok(before);
+    assert.equal(before.removed_date, null);
+
+    const logged = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "harvested carrots from the carrot row from 3-4pm",
+      now: NOW,
+    });
+    assert.equal(logged.session?.activity_type, "harvest");
+    assert.equal(logged.session?.planting_id, "planting-carrots");
+    const cleared = (await store.listPlantings()).find((item) => item.id === "planting-carrots");
+    assert.equal(cleared?.removed_date, "2026-11-14");
+
+    await handleIncoming(store, { phone: "+15555501001", text: "undo", now: NOW });
+    const restored = (await store.listPlantings()).find((item) => item.id === "planting-carrots");
+    assert.equal(restored?.removed_date, null);
   });
 
   it("undoes the last log and answers schedule and watering questions", async () => {

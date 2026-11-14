@@ -26,7 +26,7 @@ export function PriorityPanel({
   return (
     <aside className="priority">
       <header>
-        <h2>Priority task</h2>
+        <h2>Priority</h2>
         <p>From the work log and planting dates.</p>
       </header>
       <ul>
