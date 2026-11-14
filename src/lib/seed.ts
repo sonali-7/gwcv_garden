@@ -217,7 +217,6 @@ export function buildSeed(now: Date, timeZone = DEFAULT_TZ): DatabaseShape {
   const threads: Record<string, ThreadMessage[]> = {
     "+15555501001": [
       bubble("in", treeSession.raw_message, treeSession.start),
-      bubble("out", "Got it.", treeSession.start),
       bubble(
         "out",
         `Logged: Emma, ${whenPhrase(new Date(treeSession.start), new Date(treeSession.end), now, timeZone)}, ${workPhrase("plant", "trees", "North border")}.`,

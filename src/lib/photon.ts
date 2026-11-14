@@ -1,6 +1,19 @@
 import { randomUUID } from "node:crypto";
 
-export const PHOTON_DAILY_LIMIT = 12;
+const DEFAULT_DAILY_LIMIT = 100;
+
+export const LIMIT_NOTICE = "That's my last reply today. I'll keep logging what you send.";
+
+export function photonDailyLimit(): number {
+  const value = Number(process.env.PHOTON_DAILY_LIMIT);
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_DAILY_LIMIT;
+}
+
+export function photonReply(replies: string[], sentToday: number, limit: number): string | null {
+  const text = replies.join("\n").trim();
+  if (!text || sentToday >= limit) return null;
+  return sentToday === limit - 1 ? `${text}\n\n${LIMIT_NOTICE}` : text;
+}
 
 export async function sendPhotonText(input: {
   projectId: string;
@@ -24,6 +37,16 @@ export async function sendPhotonText(input: {
     }),
   });
   if (!response.ok) {
-    throw new Error(`Photon send failed (${response.status})`);
+    let code = "";
+    try {
+      const problem = (await response.json()) as { code?: string; title?: string };
+      code = problem.code || problem.title || "";
+    } catch {
+      code = "";
+    }
+    const hint = input.projectId.startsWith("pho_prj_")
+      ? ""
+      : " PHOTON_PROJECT_ID should start with pho_prj_ (Settings in the Photon dashboard).";
+    throw new Error(`Photon send failed (${response.status}${code ? ` ${code}` : ""}).${hint}`);
   }
 }

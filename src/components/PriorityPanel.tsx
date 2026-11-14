@@ -45,6 +45,7 @@ export function PriorityPanel({
                 <span>
                   <strong>{task.title}</strong>
                   {where ? <em>{where}</em> : <em>Garden</em>}
+                  {task.id === selectedId ? <small>{task.detail}</small> : null}
                 </span>
               </button>
             </li>
