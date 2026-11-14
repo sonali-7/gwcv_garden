@@ -1,0 +1,50 @@
+[
+  {
+    "family": "nightshade",
+    "crops": ["tomato", "tomatoes", "potato", "pepper", "eggplant"],
+    "nitrogenFixer": false,
+    "feeder": "heavy"
+  },
+  {
+    "family": "brassica",
+    "crops": ["cabbage", "kale", "broccoli", "collards"],
+    "nitrogenFixer": false,
+    "feeder": "heavy"
+  },
+  {
+    "family": "legume",
+    "crops": ["beans", "peas", "clover"],
+    "nitrogenFixer": true,
+    "feeder": "light"
+  },
+  {
+    "family": "umbellifer",
+    "crops": ["carrot", "carrots", "parsley", "dill"],
+    "nitrogenFixer": false,
+    "feeder": "light"
+  },
+  {
+    "family": "morning glory",
+    "crops": ["sweet potato", "sweet potatoes"],
+    "nitrogenFixer": false,
+    "feeder": "light"
+  },
+  {
+    "family": "amaranth",
+    "crops": ["spinach", "chard", "beet", "lettuce"],
+    "nitrogenFixer": false,
+    "feeder": "medium"
+  },
+  {
+    "family": "grass",
+    "crops": ["corn"],
+    "nitrogenFixer": false,
+    "feeder": "heavy"
+  },
+  {
+    "family": "woody",
+    "crops": ["tree", "trees"],
+    "nitrogenFixer": false,
+    "feeder": "light"
+  }
+]

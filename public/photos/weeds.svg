@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" role="img" aria-label="Weeds pulled beside sweet potato vines">
+  <rect width="320" height="200" fill="#f6f1e4"/>
+  <rect y="148" width="320" height="52" fill="#c9a66b"/>
+  <path d="M20 150 C60 110 80 120 100 70 C120 120 150 100 170 150" fill="none" stroke="#3f8a3a" stroke-width="6"/>
+  <path d="M150 150 C180 100 210 120 230 60 C250 110 280 90 310 150" fill="none" stroke="#2f6b32" stroke-width="6"/>
+  <g fill="#d4533c">
+    <ellipse cx="70" cy="132" rx="10" ry="6" transform="rotate(-20 70 132)"/>
+    <ellipse cx="190" cy="128" rx="10" ry="6" transform="rotate(15 190 128)"/>
+    <ellipse cx="250" cy="136" rx="9" ry="5" transform="rotate(-10 250 136)"/>
+  </g>
+  <g stroke="#6a8f3a" stroke-width="3" fill="none">
+    <path d="M40 150 C42 120 30 110 34 90"/>
+    <path d="M48 150 C55 125 70 118 66 96"/>
+    <path d="M280 150 C286 124 300 116 292 94"/>
+  </g>
+</svg>

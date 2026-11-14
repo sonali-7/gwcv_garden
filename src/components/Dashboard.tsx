@@ -1,0 +1,171 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { CalendarView } from "@/components/CalendarView";
+import { DetailCard } from "@/components/DetailCard";
+import { Phone } from "@/components/Phone";
+import { PriorityPanel } from "@/components/PriorityPanel";
+import { addDays, formatWeekTitle, startOfWeekYmd } from "@/lib/time";
+import type { DashboardData } from "@/lib/types";
+
+export function Dashboard({ initial }: { initial: DashboardData }) {
+  const [data, setData] = useState(initial);
+  const [week, setWeek] = useState(initial.weekStart);
+  const [selectedId, setSelectedId] = useState<string | null>("session-jeremy-weed");
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectedId(null);
+        setTaskId(null);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  async function reload(nextWeek = week) {
+    const response = await fetch(`/api/dashboard?week=${nextWeek}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("The week didn't load.");
+    const body = (await response.json()) as DashboardData;
+    setData(body);
+    setWeek(body.weekStart);
+    return body;
+  }
+
+  async function shift(days: number) {
+    setBusy(true);
+    setError("");
+    try {
+      await reload(addDays(week, days));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The week didn't load.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetDemo() {
+    if (!window.confirm("Reset the demo log back to the sample week?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await fetch("/api/reset", { method: "POST" });
+      await reload(initial.weekStart);
+      setSelectedId("session-jeremy-weed");
+      setTaskId(null);
+    } catch {
+      setError("Reset didn't finish.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selected = data.sessions.find((session) => session.id === selectedId) ?? null;
+  const task = data.tasks.find((item) => item.id === taskId) ?? null;
+  const highlightBedId = task?.bed_id ?? selected?.bed_id ?? null;
+  const title = useMemo(() => formatWeekTitle(week), [week]);
+
+  return (
+    <div className="app">
+      <header className="top">
+        <div className="brand">
+          <span className="leaf" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="28" height="28">
+              <path d="M6 20c8-1 12-8 18-14-1 10-6 16-14 18 2 2 4 4 4 6H8c0-3-1-6-2-10z" fill="#3f7d3a" />
+              <path d="M10 22c4-1 7-5 9-9" fill="none" stroke="#e7f0d8" strokeWidth="1.4" />
+            </svg>
+          </span>
+          <div>
+            <p className="eyebrow">GWCV garden</p>
+            <h1>Calendar view</h1>
+          </div>
+        </div>
+        <div className="week-nav">
+          <button type="button" onClick={() => shift(-7)} disabled={busy} aria-label="Previous week">
+            ‹
+          </button>
+          <div>
+            <strong>{title}</strong>
+            <span>Sun–Sat · 7am–7pm</span>
+          </div>
+          <button type="button" onClick={() => shift(7)} disabled={busy} aria-label="Next week">
+            ›
+          </button>
+          <button
+            type="button"
+            className="texty"
+            onClick={() => {
+              setBusy(true);
+              reload(initial.weekStart)
+                .catch(() => setError("The week didn't load."))
+                .finally(() => setBusy(false));
+            }}
+            disabled={busy}
+          >
+            This week
+          </button>
+        </div>
+        <button type="button" className="texty" onClick={resetDemo} disabled={busy}>
+          Reset demo
+        </button>
+      </header>
+      {error ? <p className="banner">{error}</p> : null}
+      <div className="workspace">
+        <section className="calendar-card">
+          <CalendarView
+            weekStart={data.weekStart}
+            today={data.today}
+            timezone={data.timezone}
+            people={data.people}
+            sessions={data.sessions}
+            plantings={data.plantings}
+            selectedId={selectedId}
+            highlightBedId={highlightBedId}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setTaskId(null);
+            }}
+          />
+          <DetailCard
+            session={selected}
+            task={task}
+            people={data.people}
+            beds={data.beds}
+            plantings={data.plantings}
+            photos={data.photos}
+            timezone={data.timezone}
+          />
+        </section>
+        <PriorityPanel
+          tasks={data.tasks}
+          beds={data.beds}
+          plantings={data.plantings}
+          selectedId={taskId}
+          onSelect={(id) => {
+            setTaskId(id);
+            setSelectedId(null);
+          }}
+        />
+        <Phone
+          people={data.people}
+          threads={data.threads}
+          newSender={data.newSender}
+          onSent={async (info) => {
+            const target = info.sessionStart
+              ? startOfWeekYmd(new Date(info.sessionStart), data.timezone)
+              : week;
+            const next = await reload(target);
+            if (info.sessionId && next.sessions.some((session) => session.id === info.sessionId)) {
+              setSelectedId(info.sessionId);
+              setTaskId(null);
+            }
+          }}
+        />
+      </div>
+    </div>
+  );
+}

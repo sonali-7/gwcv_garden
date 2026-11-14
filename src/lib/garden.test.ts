@@ -1,0 +1,247 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { slicesForSession } from "./calendar";
+import { loadDashboard } from "./dashboard-data";
+import { handleIncoming } from "./handle-message";
+import { createMemoryStore } from "./memory-store";
+import { parseMessage, timeGaps } from "./parse";
+import { buildTasks } from "./priority";
+import { buildSeed } from "./seed";
+import { DEFAULT_TZ, startOfWeekYmd, zonedToUtc } from "./time";
+import { readPhotonInbound, verifyStandardWebhook } from "./webhook";
+import { createHmac } from "node:crypto";
+
+const NOW = new Date("2026-11-14T15:00:00.000Z");
+
+describe("parser", () => {
+  it("asks for am or pm instead of guessing", () => {
+    const parsed = parseMessage("from 8-9 I planted trees");
+    assert.equal(parsed.kind, "session");
+    if (parsed.kind !== "session") return;
+    assert.equal(parsed.draft.activity, "plant");
+    assert.equal(parsed.draft.crop, "trees");
+    assert.deepEqual(timeGaps(parsed.draft), ["ampm"]);
+  });
+
+  it("accepts an explicit morning range", () => {
+    const parsed = parseMessage("from 8-9am I planted trees");
+    assert.equal(parsed.kind, "session");
+    if (parsed.kind !== "session") return;
+    assert.deepEqual(timeGaps(parsed.draft), []);
+    assert.equal(parsed.draft.startAmpm, "am");
+  });
+
+  it("keeps a duration and asks when it started", () => {
+    const parsed = parseMessage("weeded the carrot row for an hour");
+    assert.equal(parsed.kind, "session");
+    if (parsed.kind !== "session") return;
+    assert.equal(parsed.draft.activity, "weed");
+    assert.equal(parsed.draft.crop, "carrots");
+    assert.equal(parsed.draft.durationMin, 60);
+    assert.deepEqual(timeGaps(parsed.draft), ["start"]);
+  });
+
+  it("recognizes questions, undo, and emergencies", () => {
+    assert.equal(parseMessage("what's on the schedule this week?").kind, "query_schedule");
+    assert.equal(parseMessage("what needs watering?").kind, "query_watering");
+    assert.equal(parseMessage("undo").kind, "undo");
+    assert.equal(parseMessage("I hurt my hand").kind, "emergency");
+  });
+});
+
+describe("priority tasks", () => {
+  it("matches the week board for the demo Saturday", () => {
+    const seed = buildSeed(NOW);
+    const tasks = buildTasks({
+      now: NOW,
+      beds: seed.beds,
+      plantings: seed.plantings,
+      sessions: seed.sessions,
+      timeZone: DEFAULT_TZ,
+    });
+    assert.deepEqual(
+      tasks.map((task) => task.title),
+      ["Sweet potato needs watering", "2 weeks to harvest for carrots", "Fill space X", "Weekly meeting"],
+    );
+    assert.equal(tasks[0].severity, "urgent");
+    assert.equal(tasks[1].severity, "upcoming");
+    assert.equal(tasks[2].bed_id, "bed-x");
+  });
+});
+
+describe("calendar slices", () => {
+  it("places the sweet potato weeding on Thursday morning", () => {
+    const seed = buildSeed(NOW);
+    const session = seed.sessions.find((item) => item.id === "session-jeremy-weed");
+    assert.ok(session);
+    const week = startOfWeekYmd(NOW, DEFAULT_TZ);
+    const slices = slicesForSession(session, week, DEFAULT_TZ);
+    assert.equal(slices.length, 1);
+    assert.equal(slices[0].day, "2026-11-12");
+    assert.equal(slices[0].topPx, 46);
+    assert.equal(slices[0].heightPx, 230);
+    const eight = zonedToUtc("2026-11-12", 8, 0, DEFAULT_TZ);
+    assert.equal(new Date(session.start).toISOString(), eight.toISOString());
+  });
+});
+
+describe("text log", () => {
+  it("confirms a planting after one clarifying question", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const first = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "from 8-9 I planted trees",
+      now: NOW,
+    });
+    assert.match(first.replies[0], /8–9am or 8–9pm/);
+    assert.equal(first.session, null);
+
+    const second = await handleIncoming(store, { phone: "+15555501001", text: "am", now: NOW });
+    assert.match(second.replies.join(" "), /Logged: Emma/);
+    assert.match(second.replies.join(" "), /north border/);
+    assert.equal(second.session?.activity_type, "plant");
+  });
+
+  it("logs a timed weeding on the carrot row", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const asked = await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "weeded the carrot row for an hour",
+      now: NOW,
+    });
+    assert.equal(asked.replies[0], "What time did you start?");
+    const logged = await handleIncoming(store, { phone: "+15555501003", text: "10am", now: NOW });
+    assert.equal(logged.session?.bed_id, "bed-carrot");
+    assert.equal(logged.session?.planting_id, "planting-carrots");
+    const start = new Date(logged.session!.start);
+    assert.equal(start.toISOString(), zonedToUtc("2026-11-14", 10, 0, DEFAULT_TZ).toISOString());
+  });
+
+  it("learns a new volunteer's name, then logs the stashed text", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const phone = "+15555501999";
+    const first = await handleIncoming(store, {
+      phone,
+      text: "weeded the carrot row for an hour",
+      now: NOW,
+    });
+    assert.match(first.replies[0], /name/i);
+    const named = await handleIncoming(store, { phone, text: "Priya", now: NOW });
+    assert.match(named.replies[0], /Priya/);
+    assert.equal(named.replies[1], "What time did you start?");
+    const logged = await handleIncoming(store, { phone, text: "2pm", now: NOW });
+    assert.equal(logged.person?.name, "Priya");
+    assert.equal(logged.session?.bed_id, "bed-carrot");
+    assert.equal(logged.person?.phone, phone);
+  });
+
+  it("creates a planting when someone plants into an empty row", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    await handleIncoming(store, { phone: "+15555501002", text: "from 8-9am I planted kale", now: NOW });
+    const logged = await handleIncoming(store, { phone: "+15555501002", text: "space x", now: NOW });
+    assert.equal(logged.session?.bed_id, "bed-x");
+    const plantings = await store.listPlantings();
+    const kale = plantings.find((item) => item.crop === "kale" && item.removed_date === null);
+    assert.ok(kale);
+    assert.equal(kale.bed_id, "bed-x");
+    assert.equal(kale.source_session_id, logged.session?.id);
+  });
+
+  it("undoes the last log and answers schedule and watering questions", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const before = (await store.listSessions()).length;
+    const logged = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "watered the carrot row from 4-5pm",
+      now: NOW,
+    });
+    assert.ok(logged.session);
+    const undone = await handleIncoming(store, { phone: "+15555501001", text: "undo", now: NOW });
+    assert.match(undone.replies[0], /Removed/);
+    assert.equal((await store.listSessions()).length, before);
+
+    const schedule = await handleIncoming(store, {
+      phone: "+15555501002",
+      text: "what's on the schedule this week?",
+      now: NOW,
+    });
+    assert.match(schedule.replies[0], /Emma/);
+    assert.match(schedule.replies[0], /Jeremy/);
+
+    const water = await handleIncoming(store, {
+      phone: "+15555501002",
+      text: "what needs watering?",
+      now: NOW,
+    });
+    assert.match(water.replies[0], /Sweet potato needs watering/);
+  });
+
+  it("does not log an emergency", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const before = (await store.listSessions()).length;
+    const result = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "this is an emergency, I hurt my hand",
+      now: NOW,
+    });
+    assert.match(result.replies[0], /911/);
+    assert.equal((await store.listSessions()).length, before);
+  });
+});
+
+describe("shared contract", () => {
+  it("does not send phone numbers to the calendar payload", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const dashboard = await loadDashboard(store, null, NOW);
+    const encoded = JSON.stringify(dashboard);
+    assert.equal(encoded.includes("+15555501001"), false);
+    assert.equal(encoded.includes("5555501002"), false);
+    assert.equal(dashboard.people.map((person) => person.name).join(","), "Emma,Sonali,Jeremy");
+    assert.ok(dashboard.threads["person-emma"].length > 0);
+  });
+});
+
+describe("photon webhook", () => {
+  it("verifies a standard webhook and reads the sender handle", () => {
+    const rawKey = Buffer.from("garden-demo-secret");
+    const secret = `whsec_${rawKey.toString("base64")}`;
+    const body = JSON.stringify({
+      id: "pho_evt_1",
+      type: "message.received",
+      data: {
+        object: {
+          id: "pho_msg_1",
+          status: "received",
+          sentBy: { handle: "+15555501001", kind: "human" },
+          receivedBy: { id: "pho_usr_agent" },
+          space: { id: "pho_spc_1" },
+          content: { type: "text", format: "plain", text: "weeded the carrot row for an hour" },
+        },
+      },
+    });
+    const timestamp = "1760000000";
+    const signature = createHmac("sha256", rawKey).update(`pho_evt_1.${timestamp}.${body}`).digest("base64");
+    const event = verifyStandardWebhook(
+      body,
+      { id: "pho_evt_1", timestamp, signature: `v1,${signature}` },
+      secret,
+      1760000000 * 1000,
+    );
+    const inbound = readPhotonInbound(event);
+    assert.ok(inbound && "phone" in inbound);
+    if (!inbound || !("phone" in inbound)) return;
+    assert.equal(inbound.phone, "+15555501001");
+    assert.equal(inbound.spaceId, "pho_spc_1");
+    assert.match(inbound.text, /carrot/);
+
+    assert.throws(() =>
+      verifyStandardWebhook(body, { id: "pho_evt_1", timestamp, signature: "v1,nope" }, secret, 1760000000 * 1000),
+    );
+    const dispatched = readPhotonInbound({
+      id: "pho_evt_2",
+      type: "message.received",
+      data: { object: { status: "dispatched", sentBy: { handle: "+1", kind: "agent" } } },
+    });
+    assert.deepEqual(dispatched, { ignore: true });
+  });
+});
