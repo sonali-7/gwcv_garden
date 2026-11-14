@@ -1,5 +1,7 @@
 import { firstOverlap } from "@/lib/bed-space";
 import { getStore } from "@/lib/db";
+import { canDelete } from "@/lib/drop-plan";
+import { gardenTz, todayYmd } from "@/lib/time";
 import { cleanGeometry, cleanName } from "@/lib/garden-api";
 import { json, noContent } from "@/lib/http";
 
@@ -38,10 +40,13 @@ export async function PATCH(request: Request, { params }: Ctx) {
 export async function DELETE(_request: Request, { params }: Ctx) {
   const { id } = await params;
   const store = await getStore();
-  const plantings = await store.listPlantings();
-  if (plantings.some((planting) => planting.bed_id === id)) {
+  const mine = (await store.listPlantings()).filter((planting) => planting.bed_id === id);
+  // Plans that haven't started go with the bed; anything planted (or logged by text) is history rotation needs.
+  const today = todayYmd(new Date(), gardenTz());
+  if (mine.some((planting) => !canDelete(planting, today))) {
     return json({ error: "This bed has planting history, so it stays. Rename or move it instead." }, 409);
   }
+  for (const planting of mine) await store.deletePlanting(planting.id);
   await store.deleteBed(id);
   return noContent();
 }
