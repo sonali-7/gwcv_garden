@@ -1,4 +1,5 @@
 import { canonicalCrop, familyOf } from "./crops";
+import { geminiModels, geminiText } from "./gemini";
 
 export type LabeledBed = { n: number; name: string | null; crops: string[]; skip: boolean };
 export type MissedBed = { name: string; crops: string[]; box: [number, number, number, number] };
@@ -36,7 +37,9 @@ Reply with JSON only:
 
 type Image = { base64: string; mime: string };
 
-const READ_TIMEOUT_MS = 60_000;
+/** The first model gets this long before the backup model is tried; the backup gets READ_TIMEOUT_MS. */
+const FIRST_TRY_MS = 40_000;
+const READ_TIMEOUT_MS = 40_000;
 
 /**
  * Ask Gemini to read a drawing. Returns ai:false (and nothing read) when there's no API key.
@@ -44,48 +47,40 @@ const READ_TIMEOUT_MS = 60_000;
  */
 export async function readSketchLabels(original: Image, marked: Image, count: number, edges: string[]): Promise<SketchLabels> {
   const empty: SketchLabels = { ai: false, beds: [], missed: [], dimensions: [], units: null, widthFt: null, lengthFt: null };
-  const key = process.env.GEMINI_API_KEY;
-  if (!key || count < 1) return empty;
-  const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  if (!process.env.GEMINI_API_KEY || count < 1) return empty;
+  const models = geminiModels().join(" / ");
   const started = Date.now();
-  let response: Response;
+  let text: string | null;
   try {
-    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      signal: AbortSignal.timeout(READ_TIMEOUT_MS),
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { inline_data: { mime_type: original.mime, data: original.base64 } },
-              { inline_data: { mime_type: marked.mime, data: marked.base64 } },
-              { text: PROMPT(count, edges) },
-            ],
-          },
-        ],
-        generationConfig: { maxOutputTokens: 8000, responseMimeType: "application/json" },
-      }),
-    });
+    text = await geminiText(
+      [
+        { inline_data: { mime_type: original.mime, data: original.base64 } },
+        { inline_data: { mime_type: marked.mime, data: marked.base64 } },
+        { text: PROMPT(count, edges) },
+      ],
+      { maxOutputTokens: 8000, responseMimeType: "application/json" },
+      READ_TIMEOUT_MS,
+      FIRST_TRY_MS,
+    );
   } catch (error) {
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    console.error(`[sketch] ${model} ${timedOut ? "timed out" : "failed"} after ${Date.now() - started}ms`, timedOut ? "" : error);
-    throw new Error(timedOut ? `Gemini (${model}) took over ${READ_TIMEOUT_MS / 1000} seconds. Try again, or set GEMINI_MODEL to a faster model.` : "Couldn't reach Gemini.");
+    console.error(`[sketch] ${models} failed after ${Date.now() - started}ms:`, error instanceof Error ? error.message : error);
+    throw new Error(friendlyError(error, models));
   }
-  if (!response.ok) {
-    const detail = await response.text();
-    console.error(`[sketch] ${model} returned ${response.status} after ${Date.now() - started}ms`, detail.slice(0, 500));
-    if (response.status === 429) throw new Error(`Gemini's request limit for ${model} is used up. Try later or pick another GEMINI_MODEL.`);
-    if (response.status === 404) throw new Error(`Gemini doesn't offer the model "${model}" to this key. Check GEMINI_MODEL.`);
-    if (response.status === 400 || response.status === 403) throw new Error("Gemini rejected the request. Check GEMINI_API_KEY.");
-    throw new Error(`Gemini returned an error (${response.status}).`);
-  }
-  const result = (await response.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-  const text = (result.candidates?.[0]?.content?.parts ?? []).map((part) => part.text ?? "").join("");
-  console.log(`[sketch] ${model} read ${count} beds in ${Date.now() - started}ms`);
-  if (!text) throw new Error("Gemini sent back an empty answer. Try again.");
+  console.log(`[sketch] ${models} read ${count} beds in ${Date.now() - started}ms`);
+  if (!text?.trim()) throw new Error("Gemini sent back an empty answer. Try again.");
   return { ...parseLabels(text, count, edges), ai: true };
+}
+
+function friendlyError(error: unknown, models: string): string {
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return `Gemini (${models}) took too long. Try again, or set GEMINI_MODEL to a faster model.`;
+  }
+  const status = Number(/Gemini (\d+)/.exec(error instanceof Error ? error.message : "")?.[1]);
+  if (status === 429) return `Gemini's request limit is used up (${models}). Try later or pick another GEMINI_MODEL.`;
+  if (status === 404) return `Gemini doesn't offer "${models}" to this key. Check GEMINI_MODEL.`;
+  if (status === 400 || status === 403) return "Gemini rejected the request. Check GEMINI_API_KEY.";
+  if (status) return `Gemini returned an error (${status}).`;
+  return "Couldn't reach Gemini.";
 }
 
 function cleanCrops(value: unknown): string[] {

@@ -19,9 +19,9 @@ type ToolFields = Record<string, unknown>;
 export async function interpretMessage(text: string, context?: GardenContext): Promise<ParsedMessage> {
   if (isEmergency(text)) return { kind: "emergency" };
   const rules = parseMessage(text);
-  if (!process.env.GEMINI_API_KEY && !process.env.ANTHROPIC_API_KEY) return rules;
+  if (!process.env.GEMINI_API_KEY) return rules;
   try {
-    const model = await classifyWithModel(text, context);
+    const model = await classifyWithGemini(text, context);
     if (!model || model.kind === "unknown") return rules;
     if (model.kind === "query_schedule" && rules.kind === "session") return rules;
     if (model.kind === "session") {
@@ -176,12 +176,6 @@ function instructions(text: string, context: GardenContext | undefined): string 
   ].join("\n");
 }
 
-async function classifyWithModel(text: string, context: GardenContext | undefined): Promise<ParsedMessage | null> {
-  if (process.env.GEMINI_API_KEY) return classifyWithGemini(text, context);
-  if (process.env.ANTHROPIC_API_KEY) return classifyWithClaude(text, context);
-  return null;
-}
-
 async function classifyWithGemini(text: string, context: GardenContext | undefined): Promise<ParsedMessage | null> {
   const properties: Record<string, unknown> = {};
   for (const [name, field] of Object.entries(FIELDS)) {
@@ -202,27 +196,4 @@ async function classifyWithGemini(text: string, context: GardenContext | undefin
   );
   if (!raw?.trim()) return null;
   return messageFromTool(text, JSON.parse(raw));
-}
-
-async function classifyWithClaude(text: string, context: GardenContext | undefined): Promise<ParsedMessage | null> {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return null;
-  const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: key });
-  const result = await client.messages.create({
-    model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
-    max_tokens: 400,
-    tool_choice: { type: "tool", name: "classify_garden_text" },
-    tools: [
-      {
-        name: "classify_garden_text",
-        description: "Classify one volunteer text into a garden log action. Call this exactly once.",
-        input_schema: { type: "object", properties: FIELDS, required: ["kind"] },
-      },
-    ],
-    messages: [{ role: "user", content: instructions(text, context) }],
-  });
-  const block = result.content.find((item) => item.type === "tool_use");
-  if (!block || block.type !== "tool_use") return null;
-  return messageFromTool(text, block.input);
 }

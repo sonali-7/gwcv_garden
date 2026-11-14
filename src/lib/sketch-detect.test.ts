@@ -117,7 +117,7 @@ describe("reading a garden drawing", () => {
   });
 });
 
-describe("reading labels from Claude's reply", async () => {
+describe("reading labels from Gemini's reply", async () => {
   const { parseLabels } = await import("./sketch-labels");
   it("keeps valid beds, maps crop names, and ignores junk", () => {
     const text = `Here you go:

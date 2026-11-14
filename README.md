@@ -81,19 +81,16 @@ MONGODB_DB=gwcv_garden
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-flash-latest
 GEMINI_FALLBACK_MODEL=gemini-flash-lite-latest
-ANTHROPIC_API_KEY=
-ANTHROPIC_MODEL=claude-sonnet-4-5
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3.8-flash
 PHOTON_API_KEY=
 PHOTON_PROJECT_ID=
 PHOTON_WEBHOOK_SECRET=
+PHOTON_DAILY_LIMIT=100
 GARDEN_TZ=America/New_York
 ```
 
 With `MONGODB_URI`, the same records live in MongoDB (`people`, `beds`, `plantings`, `workSessions`, `photos`, `tasks`). Photo files stay on disk under `public/uploads`; Mongo holds the URL. If Atlas is set but unreachable, the app falls back to the JSON file.
 
-`GEMINI_API_KEY` runs the text agent and photo captions with `GEMINI_MODEL`. If that model is overloaded or takes more than 4 seconds, `GEMINI_FALLBACK_MODEL` answers. With only `ANTHROPIC_API_KEY`, Claude does the same job. LangChain is not used for texts. Clock times and days written in the text win over the model's reading, and the model cannot invent a day. If no key is set or every call fails, the rules parser answers. Either way, a missing time of day or row gets one short question, and an injury or emergency gets a fixed reply to call 911 and is not logged.
+`GEMINI_API_KEY` is the only AI key. It runs the text agent, photo captions, and Import drawing's handwriting reading with `GEMINI_MODEL`. If that model is overloaded or slow (more than 4 seconds for a text, 40 for a drawing), `GEMINI_FALLBACK_MODEL` answers. All Gemini calls go through `src/lib/gemini.ts`. LangChain is not used for texts. Clock times and days written in the text win over the model's reading, and the model cannot invent a day. If no key is set or every call fails, the rules parser answers. Either way, a missing time of day or row gets one short question, and an injury or emergency gets a fixed reply to call 911 and is not logged.
 
 Each incoming text gets one reply at most, with every line of the answer in that message. Replies are capped at `PHOTON_DAILY_LIMIT` per sender per day (100 by default). The last reply before the cap says so, and texts after it are still logged. The on-screen phone does not use Photon and has no cap. Phone numbers stay in the database and are not returned by the read APIs above.
 

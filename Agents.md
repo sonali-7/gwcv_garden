@@ -33,8 +33,8 @@ DATA CONTRACT (align with teammate; they own Bed)
 TECH
 - TypeScript + Next.js (App Router).
 - MongoDB Atlas via the official Node driver (or Mongoose). Collections: people, gardenConfig, crops, beds, plantings, workSessions, photos, tasks. Photo files go in object storage or local disk; Mongo holds URLs and metadata. Connection string in env vars.
-- Anthropic SDK for the fast text parser (structured output / tool calling) and image captioning. Model name from an env var. This path must reply quickly: acknowledge immediately, then send the result.
-- deepagents (TypeScript) is used ONLY for the planner. Use the Anthropic LangChain integration and check the current deepagents docs for the exact API.
+- Gemini API (GEMINI_API_KEY, via src/lib/gemini.ts) for the fast text parser (structured JSON output), image captioning, and reading garden drawings. Model names from env vars (GEMINI_MODEL, GEMINI_FALLBACK_MODEL). No Anthropic key is used. This path must reply quickly: acknowledge immediately, then send the result.
+- deepagents (TypeScript) is used ONLY for the planner. Use the Google Gemini LangChain integration and check the current deepagents docs for the exact API.
 - Channel adapter interface (receive, send) with two implementations: Photon, and a local web simulator that looks like a text thread. The simulator must work with no keys other than the LLM.
 - Seed script: 3 volunteers, ~2 weeks of sessions, several plantings, 2 prior seasons of history, crop table.
 

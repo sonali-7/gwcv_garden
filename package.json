@@ -10,7 +10,6 @@
     "seed": "tsx src/lib/seed-cli.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.0",
     "mongodb": "^6.20.0",
     "next": "^15.5.6",
     "react": "^19.2.0",
