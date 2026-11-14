@@ -36,7 +36,7 @@ export function createMemoryStore(initial?: DatabaseShape): Store {
       db.beds = db.beds.filter((item) => item.id !== id);
     },
     async getLayout() {
-      return clone(db.layout ?? defaultLayout());
+      return clone({ ...defaultLayout(), ...db.layout });
     },
     async saveLayout(layout: GardenLayout) {
       db.layout = clone(layout);

@@ -8,10 +8,16 @@ export function geminiModels(): string[] {
   return primary === backup ? [primary] : [primary, backup];
 }
 
+/**
+ * Ask Gemini, trying GEMINI_MODEL and then GEMINI_FALLBACK_MODEL if the first is busy or slow.
+ * `timeoutMs` is the last model's limit; the first model gets `primaryTimeoutMs` (4 seconds by default, for quick texts).
+ * Returns null without an API key. Throws "Gemini <status>" when every model fails.
+ */
 export async function geminiText(
   parts: GeminiPart[],
   generationConfig: Record<string, unknown>,
   timeoutMs: number,
+  primaryTimeoutMs = Math.min(timeoutMs, 4_000),
 ): Promise<string | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
@@ -26,7 +32,7 @@ export async function geminiText(
         {
           method: "POST",
           headers: { "content-type": "application/json", "x-goog-api-key": key },
-          signal: AbortSignal.timeout(last ? timeoutMs : Math.min(timeoutMs, 4_000)),
+          signal: AbortSignal.timeout(last ? timeoutMs : primaryTimeoutMs),
           body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig }),
         },
       );

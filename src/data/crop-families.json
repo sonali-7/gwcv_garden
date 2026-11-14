@@ -6,7 +6,10 @@
       "tomatoes",
       "potato",
       "pepper",
-      "eggplant"
+      "eggplant",
+      "goldenberry",
+      "goldenberries",
+      "ground cherry"
     ],
     "nitrogenFixer": false,
     "feeder": "heavy"
@@ -17,7 +20,9 @@
       "cabbage",
       "kale",
       "broccoli",
-      "collards"
+      "collards",
+      "radish",
+      "radishes"
     ],
     "nitrogenFixer": false,
     "feeder": "heavy"
@@ -79,7 +84,59 @@
       "garlic",
       "onion",
       "onions",
-      "leeks"
+      "leeks",
+      "leek"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "light"
+  },
+  {
+    "family": "cucurbit",
+    "crops": [
+      "pumpkin",
+      "pumpkins",
+      "squash",
+      "zucchini",
+      "cucumber",
+      "cucumbers",
+      "melon",
+      "melons",
+      "watermelon",
+      "bitter melon",
+      "bitter melons",
+      "luffa",
+      "gourd"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "heavy"
+  },
+  {
+    "family": "flower",
+    "crops": [
+      "marigold",
+      "marigolds",
+      "forget-me-not",
+      "flowers",
+      "sunflower",
+      "nasturtium",
+      "zinnia",
+      "calendula"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "light"
+  },
+  {
+    "family": "herb",
+    "crops": [
+      "herbs",
+      "mint",
+      "mints",
+      "basil",
+      "rosemary",
+      "thyme",
+      "oregano",
+      "sage",
+      "lemon balm"
     ],
     "nitrogenFixer": false,
     "feeder": "light"

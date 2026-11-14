@@ -70,7 +70,7 @@ export function buildTasks(input: {
     }
   }
 
-  for (const bed of input.beds) {
+  for (const bed of input.beds.filter((b) => !b.archived)) {
     if (active.some((planting) => planting.bed_id === bed.id)) continue;
     const planned = input.plantings.find(
       (planting) => planting.bed_id === bed.id && planting.planted_date > today && !planting.removed_date,

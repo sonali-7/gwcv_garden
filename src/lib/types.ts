@@ -29,17 +29,23 @@ export type Bed = {
   name: string;
   row: string;
   geometry: { x: number; y: number; w: number; h: number } | null;
+  /** Off the map (replaced by an imported drawing). Its planting history is kept. */
+  archived?: boolean;
 };
 
 export type GardenLayout = {
+  /** Sizes are always stored in feet; units only changes how they're shown. */
   widthFt: number;
   lengthFt: number;
   imageUrl: string | null;
   location: string;
+  units: "ft" | "m";
+  /** The garden's shape as [x, y] points in feet, when it isn't a plain rectangle. */
+  outline: Array<[number, number]> | null;
 };
 
 export function defaultLayout(): GardenLayout {
-  return { widthFt: 40, lengthFt: 30, imageUrl: null, location: "" };
+  return { widthFt: 40, lengthFt: 30, imageUrl: null, location: "", units: "ft", outline: null };
 }
 
 export type Planting = {
