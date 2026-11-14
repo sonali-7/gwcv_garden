@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   DAY_END,
   DAY_START,
@@ -8,12 +9,14 @@ import {
   hourLabel,
   outsideDayGrid,
   placeSlices,
+  sessionStatus,
   sessionTouchesWeek,
   slicesForSession,
 } from "@/lib/calendar";
-import { eventSubtitle } from "@/lib/phrases";
+import { eventSubtitle, planPhrase } from "@/lib/phrases";
 import { addDays, partsInZone, weekdayShort, ymd } from "@/lib/time";
-import type { Planting, PublicPerson, WorkSession } from "@/lib/types";
+import type { Bed, Photo, Planting, PublicPerson, WorkSession } from "@/lib/types";
+import { DetailCard } from "@/components/DetailCard";
 
 export function CalendarView({
   weekStart,
@@ -22,6 +25,8 @@ export function CalendarView({
   people,
   sessions,
   plantings,
+  beds,
+  photos,
   selectedId,
   highlightBedId,
   onSelect,
@@ -32,23 +37,72 @@ export function CalendarView({
   people: PublicPerson[];
   sessions: WorkSession[];
   plantings: Planting[];
+  beds: Bed[];
+  photos: Photo[];
   selectedId: string | null;
   highlightBedId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: string | null) => void;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   const visible = sessions.filter((session) => sessionTouchesWeek(session, weekStart, timezone));
   const placed = placeSlices(visible.flatMap((session) => slicesForSession(session, weekStart, timezone)));
   const offHours = visible.filter((session) => outsideDayGrid(session, weekStart, timezone));
   const hours = Array.from({ length: DAY_END - DAY_START + 1 }, (_, index) => DAY_START + index);
-  const now = new Date();
+  const now = new Date(clock);
   const nowParts = partsInZone(now, timezone);
   const nowDay = ymd(nowParts);
   const showNow = days.includes(nowDay) && nowParts.hour >= DAY_START && nowParts.hour < DAY_END;
   const nowTop = ((nowParts.hour - DAY_START) * 60 + nowParts.minute) / 60 * HOUR_PX;
+  const selected = sessions.find((session) => session.id === selectedId) ?? null;
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!selectedId || !root) {
+      setBox(null);
+      return;
+    }
+    const button = root.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(selectedId)}"]`);
+    if (!button) {
+      setBox(null);
+      return;
+    }
+    const host = root.getBoundingClientRect();
+    const block = button.getBoundingClientRect();
+    const width = 280;
+    let left = block.left - host.left;
+    if (left + width > host.width - 8) left = Math.max(8, host.width - width - 8);
+    const roomBelow = host.bottom - block.bottom;
+    if (roomBelow < 210) {
+      setBox({ bottom: host.bottom - block.top + 8, left });
+    } else {
+      setBox({ top: block.bottom - host.top + 8, left });
+    }
+  }, [selectedId, weekStart, sessions]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    function down(event: MouseEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (popRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest(".event, .offhours button")) return;
+      onSelect(null);
+    }
+    document.addEventListener("mousedown", down);
+    return () => document.removeEventListener("mousedown", down);
+  }, [selectedId, onSelect]);
 
   return (
-    <div className="calendar">
+    <div className="calendar" ref={rootRef}>
       <div className="cal-legend">
         {people.map((person) => (
           <span key={person.id}>
@@ -56,6 +110,11 @@ export function CalendarView({
             {person.name}
           </span>
         ))}
+        <span className="status-key">
+          <span><i className="key done" />Done</span>
+          <span><i className="key now" />Now</span>
+          <span><i className="key planned" />Planned</span>
+        </span>
       </div>
       <div className="cal-scroll">
         <div className="cal-grid" style={{ ["--hour" as string]: `${HOUR_PX}px` }}>
@@ -86,24 +145,34 @@ export function CalendarView({
                   const person = people.find((item) => item.id === session?.person_id);
                   if (!session || !person) return null;
                   const planting = plantings.find((item) => item.id === session.planting_id);
-                  const subtitle = eventSubtitle(session.activity_type, planting?.crop ?? null);
-                  const selected = session.id === selectedId;
+                  const status = sessionStatus(session, now);
+                  const subtitle =
+                    status === "planned"
+                      ? planPhrase(session.activity_type, planting?.crop ?? null, null)
+                      : eventSubtitle(session.activity_type, planting?.crop ?? null);
+                  const isSelected = session.id === selectedId;
                   const related = Boolean(highlightBedId && session.bed_id === highlightBedId);
+                  const inset = slice.lanes > 1 ? 1 : 0;
                   return (
                     <button
                       key={`${slice.sessionId}-${slice.day}`}
                       type="button"
-                      className={`event${selected ? " selected" : ""}${related && !selected ? " related" : ""}${slice.heightPx >= 42 ? " tall" : ""}`}
+                      data-session-id={session.id}
+                      className={`event ${status}${isSelected ? " selected" : ""}${related && !isSelected ? " related" : ""}${slice.heightPx >= 42 ? " tall" : ""}`}
                       style={{
                         top: slice.topPx,
                         height: slice.heightPx,
-                        background: person.color,
-                        left: `calc(${slice.lane} * (100% / ${slice.lanes}) + 3px)`,
-                        width: `calc(100% / ${slice.lanes} - 6px)`,
+                        ["--who" as string]: person.color,
+                        left: `calc(${slice.lane} * (100% / ${slice.lanes}) + ${inset}px)`,
+                        width: `calc(100% / ${slice.lanes} - ${inset * 2}px)`,
                       }}
-                      onClick={() => onSelect(session.id)}
+                      title={`${person.name} · ${status === "done" ? "done" : status === "now" ? "happening now" : "planned"}`}
+                      onClick={() => onSelect(isSelected ? null : session.id)}
                     >
-                      <span className="event-name">{person.name}</span>
+                      <span className="event-name">
+                        {status === "now" ? <b className="live-dot" aria-hidden="true" /> : null}
+                        {person.name}
+                      </span>
                       <span className="event-sub">{subtitle}</span>
                     </button>
                   );
@@ -118,12 +187,40 @@ export function CalendarView({
           {offHours.map((session) => {
             const person = people.find((item) => item.id === session.person_id);
             return (
-              <button key={session.id} type="button" onClick={() => onSelect(session.id)}>
+              <button
+                key={session.id}
+                type="button"
+                data-session-id={session.id}
+                onClick={() => onSelect(session.id === selectedId ? null : session.id)}
+              >
                 <i style={{ background: person?.color }} />
                 {person?.name}: {session.notes}
               </button>
             );
           })}
+        </div>
+      ) : null}
+      {selected && box ? (
+        <div
+          className="session-pop"
+          ref={popRef}
+          role="dialog"
+          aria-label="Session"
+          style={{ top: box.top, bottom: box.bottom, left: box.left }}
+        >
+          <button type="button" className="pop-x" onClick={() => onSelect(null)} aria-label="Close">
+            ×
+          </button>
+          <DetailCard
+            session={selected}
+            task={null}
+            people={people}
+            beds={beds}
+            plantings={plantings}
+            photos={photos}
+            timezone={timezone}
+            now={now}
+          />
         </div>
       ) : null}
     </div>

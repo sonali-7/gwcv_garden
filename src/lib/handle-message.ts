@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { interpretMessage } from "./agent";
 import { maturityDays } from "./crops";
 import { matchLocation } from "./location";
-import { isActive } from "./plantings";
-import { sentence, workPhrase } from "./phrases";
+import { activePlantings, isActive } from "./plantings";
+import { planPhrase, sentence, workPhrase } from "./phrases";
 import {
   applyClarification,
   cleanName,
@@ -10,7 +11,10 @@ import {
   isEmergency,
   parseDraft,
   parseMessage,
+  finishDraft,
+  needsDay,
   questionFor,
+  resolveStoredDate,
   timeGaps,
 } from "./parse";
 import { buildTasks } from "./priority";
@@ -165,7 +169,15 @@ async function processText(
   image: IncomingImage | null,
   say: (line: string) => Promise<void>,
 ): Promise<WorkSession | null> {
-  const parsed = parseMessage(text);
+  const beds = await store.listBeds();
+  const plantings = await store.listPlantings();
+  const day = todayYmd(now, person.timezone);
+  const parsed = await interpretMessage(text, {
+    today: day,
+    timezone: person.timezone,
+    beds: beds.map((bed) => bed.name),
+    crops: activePlantings(plantings, day).map((planting) => planting.crop),
+  });
   if (parsed.kind === "undo") return undo(store, person, now, say);
   if (parsed.kind === "query_schedule") {
     await say(await scheduleText(store, now, person.timezone));
@@ -200,12 +212,16 @@ async function answerPending(
   const held = image ?? pending.image;
 
   if (pending.kind === "time") {
-    const applied = applyClarification(pending.draft, pending.field, text);
+    const applied = applyClarification(pending.draft, pending.field, text, todayYmd(now, person.timezone));
     if (!applied) {
       const tries = pending.tries + 1;
       if (tries >= 2) {
         await store.saveConversation(person.phone, { ...conversation, pending: null });
-        await say('Send it again with a time, like "from 8–9am".');
+        await say(
+          pending.field === "day"
+            ? 'Send the day, like "November 19".'
+            : 'Send it again with a time, like "from 8–9am".',
+        );
         return null;
       }
       await store.saveConversation(person.phone, {
@@ -237,6 +253,14 @@ async function answerPending(
   return commit(store, person, pending.draft, loc.bed, loc.planting, held, now, say, false);
 }
 
+function locationText(draft: SessionDraft): string {
+  const lower = draft.sourceText.toLowerCase();
+  const extra = [draft.place, draft.crop].filter(
+    (value): value is string => Boolean(value) && !lower.includes(value!.toLowerCase()),
+  );
+  return [draft.sourceText, ...extra].join(" ");
+}
+
 async function continueDraft(
   store: Store,
   person: Person,
@@ -245,34 +269,43 @@ async function continueDraft(
   now: Date,
   say: (line: string) => Promise<void>,
 ): Promise<WorkSession | null> {
-  const gaps = timeGaps(draft);
+  const ready = finishDraft(draft);
+  const gaps = timeGaps(ready);
   if (gaps[0]) {
     await store.saveConversation(person.phone, {
       ...(await store.getConversation(person.phone)),
-      pending: { kind: "time", field: gaps[0], draft, image, tries: 0 },
+      pending: { kind: "time", field: gaps[0], draft: ready, image, tries: 0 },
     });
-    await say(questionFor(draft, gaps[0]));
+    await say(questionFor(ready, gaps[0]));
+    return null;
+  }
+  if (needsDay(ready)) {
+    await store.saveConversation(person.phone, {
+      ...(await store.getConversation(person.phone)),
+      pending: { kind: "time", field: "day", draft: ready, image, tries: 0 },
+    });
+    await say(questionFor(ready, "day"));
     return null;
   }
 
-  const interval = resolveInterval(draft, now, person.timezone);
+  const interval = resolveInterval(ready, now, person.timezone);
   if (!interval) {
     await say("What time did you start?");
     return null;
   }
   const beds = await store.listBeds();
   const plantings = await store.listPlantings();
-  const loc = matchLocation(draft.sourceText, beds, plantings, interval.day);
-  const activity = draft.activity ?? "other";
+  const loc = matchLocation(locationText(ready), beds, plantings, interval.day);
+  const activity = ready.activity ?? "other";
   if (!loc.bed && needsRow(activity)) {
     await store.saveConversation(person.phone, {
       ...(await store.getConversation(person.phone)),
-      pending: { kind: "row", draft, image, tries: 0, choices: loc.choices },
+      pending: { kind: "row", draft: ready, image, tries: 0, choices: loc.choices },
     });
     await say(loc.ambiguous ? `Which row — ${loc.choices.join(" or ")}?` : "Which row?");
     return null;
   }
-  return commit(store, person, draft, loc.bed, loc.planting, image, now, say, false);
+  return commit(store, person, ready, loc.bed, loc.planting, image, now, say, false);
 }
 
 async function commit(
@@ -342,13 +375,16 @@ async function commit(
     pending: null,
     lastSessionId: session.id,
   });
-  const phrase = workPhrase(activity, crop, bed?.name ?? null);
+  const planned = interval.start.getTime() > now.getTime();
+  const phrase = planned
+    ? planPhrase(activity, crop, bed?.name ?? null)
+    : workPhrase(activity, crop, bed?.name ?? null);
   const when = whenPhrase(interval.start, interval.end, now, person.timezone);
-  await say("Got it.");
+  const label = planned ? "Scheduled" : "Logged";
   await say(
     missingRow
-      ? `Logged: ${person.name}, ${when}, ${phrase}. I didn't attach a row.`
-      : `Logged: ${person.name}, ${when}, ${phrase}.`,
+      ? `${label}: ${person.name}, ${when}, ${phrase}. I didn't attach a row.`
+      : `${label}: ${person.name}, ${when}, ${phrase}.`,
   );
   return session;
 }
@@ -506,13 +542,20 @@ export function resolveInterval(
 
 function resolveDay(draft: SessionDraft, now: Date, timeZone: string): string {
   const today = todayYmd(now, timeZone);
+  if (draft.onDate) {
+    const resolved = resolveStoredDate(draft.onDate, today);
+    if (resolved) return resolved;
+  }
   if (draft.dayOffset != null) return addDays(today, draft.dayOffset);
   if (draft.weekday != null) {
     const current = partsInZone(now, timeZone).weekday;
     let delta = draft.weekday - current;
-    if (draft.nextWeek) {
-      if (delta <= 0) delta += 7;
-    } else if (delta > 0) delta -= 7;
+    const upcoming = draft.nextWeek || draft.activity === "meeting";
+    if (upcoming) {
+      if (delta < 0) delta += 7;
+    } else if (delta > 0) {
+      delta -= 7;
+    }
     return addDays(today, delta);
   }
   return today;

@@ -86,6 +86,21 @@ export function outsideDayGrid(session: WorkSession, weekStart: string, timeZone
   return slicesForSession(session, weekStart, timeZone).length === 0;
 }
 
+export type SessionStatus = "done" | "now" | "planned";
+
+export function sessionStatus(session: Pick<WorkSession, "start" | "end">, now: Date): SessionStatus {
+  const time = now.getTime();
+  if (new Date(session.end).getTime() <= time) return "done";
+  if (new Date(session.start).getTime() <= time) return "now";
+  return "planned";
+}
+
+export const STATUS_LABEL: Record<SessionStatus, string> = {
+  done: "Done",
+  now: "Happening now",
+  planned: "Planned",
+};
+
 export function hourLabel(hour: number): string {
   if (hour === 0 || hour === 24) return "12";
   if (hour > 12) return String(hour - 12);

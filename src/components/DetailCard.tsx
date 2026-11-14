@@ -1,6 +1,7 @@
 "use client";
 
-import { workPhrase } from "@/lib/phrases";
+import { STATUS_LABEL, sessionStatus } from "@/lib/calendar";
+import { planPhrase, workPhrase } from "@/lib/phrases";
 import { detailWhen } from "@/lib/time";
 import type { Bed, Photo, Planting, PublicPerson, Task, WorkSession } from "@/lib/types";
 
@@ -12,6 +13,7 @@ export function DetailCard({
   plantings,
   photos,
   timezone,
+  now = new Date(),
 }: {
   session: WorkSession | null;
   task: Task | null;
@@ -20,17 +22,21 @@ export function DetailCard({
   plantings: Planting[];
   photos: Photo[];
   timezone: string;
+  now?: Date;
 }) {
   if (session) {
     const person = people.find((item) => item.id === session.person_id);
     const bed = beds.find((item) => item.id === session.bed_id);
     const planting = plantings.find((item) => item.id === session.planting_id);
     const pictures = photos.filter((photo) => photo.session_id === session.id);
-    const phrase = workPhrase(session.activity_type, planting?.crop ?? null, bed?.name ?? null);
-    const summary = `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
-    const extraNotes = session.notes && session.notes.trim() !== summary ? session.notes : "";
+    const status = sessionStatus(session, now);
+    const crop = planting?.crop ?? null;
+    const done = workPhrase(session.activity_type, crop, bed?.name ?? null);
+    const doneSentence = `${done.charAt(0).toUpperCase()}${done.slice(1)}.`;
+    const phrase = status === "planned" ? `Plan: ${planPhrase(session.activity_type, crop, bed?.name ?? null)}.` : doneSentence;
+    const extraNotes = session.notes && session.notes.trim() !== doneSentence ? session.notes : "";
     return (
-      <article className="detail">
+      <article className={`detail ${status}`}>
         <header>
           <i style={{ background: person?.color ?? "#888" }} />
           <div>
@@ -38,7 +44,8 @@ export function DetailCard({
             <p>{detailWhen(new Date(session.start), new Date(session.end), timezone)}</p>
           </div>
         </header>
-        <p className="did">{summary}</p>
+        <span className={`status-chip ${status}`}>{STATUS_LABEL[status]}</span>
+        <p className="did">{phrase}</p>
         {extraNotes ? <p className="notes">{extraNotes}</p> : null}
         {pictures.map((photo) => (
           <figure key={photo.id}>

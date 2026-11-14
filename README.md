@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). No database or API key is required. Messages are parsed with rules and stored in `data/store.json`.
+Open [http://localhost:3000](http://localhost:3000). No database is required. Messages are stored in `data/store.json`. With `GEMINI_API_KEY` in `.env`, texts are read by Gemini. Without a model key, a rules parser does the same job.
 
 ```bash
 npm test
@@ -36,7 +36,8 @@ Try this in the phone:
 5. `undo` removes that person's latest log.
 6. Choose **New**, text a chore, and give a name when asked. They show up on the calendar in their own color.
 7. Attach a photo. It is stored with the session and served at `GET /api/photos` for the garden map.
-8. Click Jeremy’s sweet-potato block to read what he did.
+8. Click Jeremy’s sweet-potato block. The session opens on the calendar.
+9. Text `schedule kumquats from 4-5 today`. It asks am or pm, then which row, and does not read the week back.
 
 **Reset demo** restores the sample week.
 
@@ -77,6 +78,9 @@ The on-screen phone is the channel that works with no keys. A real SMS line uses
 ```
 MONGODB_URI=
 MONGODB_DB=gwcv_garden
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-flash-latest
+GEMINI_FALLBACK_MODEL=gemini-flash-lite-latest
 ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-sonnet-4-5
 PHOTON_API_KEY=
@@ -87,9 +91,9 @@ GARDEN_TZ=America/New_York
 
 With `MONGODB_URI`, the same records live in MongoDB (`people`, `beds`, `plantings`, `workSessions`, `photos`, `tasks`). Photo files stay on disk under `public/uploads`; Mongo holds the URL. If Atlas is set but unreachable, the app falls back to the JSON file.
 
-`ANTHROPIC_API_KEY` is optional and only used to caption photos. The text parser does not call a model, so a volunteer still gets one short question when the time of day or the row is missing. Injury or emergency messages get a fixed reply to call 911 and are not logged.
+`GEMINI_API_KEY` runs the text agent and photo captions with `GEMINI_MODEL`. If that model is overloaded or takes more than 4 seconds, `GEMINI_FALLBACK_MODEL` answers. With only `ANTHROPIC_API_KEY`, Claude does the same job. LangChain is not used for texts. Clock times and days written in the text win over the model's reading, and the model cannot invent a day. If no key is set or every call fails, the rules parser answers. Either way, a missing time of day or row gets one short question, and an injury or emergency gets a fixed reply to call 911 and is not logged.
 
-Photon replies are capped at 12 texts per sender per day. Phone numbers stay in the database and are not returned by the read APIs above.
+Each incoming text gets one reply at most, with every line of the answer in that message. Replies are capped at `PHOTON_DAILY_LIMIT` per sender per day (100 by default). The last reply before the cap says so, and texts after it are still logged. The on-screen phone does not use Photon and has no cap. Phone numbers stay in the database and are not returned by the read APIs above.
 
 ## Not in this slice
 

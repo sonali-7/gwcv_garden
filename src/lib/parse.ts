@@ -34,15 +34,21 @@ export function isEmergency(text: string): boolean {
 }
 
 export function timeGaps(draft: SessionDraft): Array<"start" | "ampm" | "end"> {
-  if (!draft.start) return ["start"];
-  if (!draft.startAmpm) return ["ampm"];
-  if (!draft.end && draft.durationMin) return [];
-  if (!draft.end) return ["end"];
-  if (!draft.endAmpm) return ["ampm"];
+  const ready = finishDraft(draft);
+  if (!ready.start) return ["start"];
+  if (!ready.startAmpm) return ["ampm"];
+  if (!ready.end && ready.durationMin) return [];
+  if (!ready.end) return ["end"];
+  if (!ready.endAmpm) return ["ampm"];
   return [];
 }
 
-export function questionFor(draft: SessionDraft, field: "start" | "ampm" | "end"): string {
+export function needsDay(draft: SessionDraft): boolean {
+  return draft.activity === "meeting" && draft.onDate == null && draft.dayOffset == null && draft.weekday == null;
+}
+
+export function questionFor(draft: SessionDraft, field: "start" | "ampm" | "end" | "day"): string {
+  if (field === "day") return "Which day?";
   if (field === "start") return "What time did you start?";
   if (field === "end") return "Until when?";
   const start = draft.start;
@@ -101,7 +107,7 @@ export function parseDraft(text: string): SessionDraft | null {
     return null;
   }
 
-  return {
+  return finishDraft({
     activity,
     crop: findCrop(lower),
     dayOffset,
@@ -112,15 +118,49 @@ export function parseDraft(text: string): SessionDraft | null {
     startAmpm,
     endAmpm,
     durationMin,
+    onDate: findExplicitDate(lower),
+    place: null,
     sourceText: trimmed,
-  };
+  });
+}
+
+export function finishDraft(draft: SessionDraft): SessionDraft {
+  if (draft.activity === "meeting" && draft.start && !draft.end && draft.durationMin == null) {
+    return { ...draft, durationMin: 60 };
+  }
+  return draft;
+}
+
+export function textHasDay(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (/\b(today|yesterday|tomorrow)\b/.test(lower)) return true;
+  if (WEEKDAY_WORDS.some((word) => new RegExp(`\\b${word}\\b`).test(lower))) return true;
+  return findExplicitDate(lower) != null;
 }
 
 export function applyClarification(
   draft: SessionDraft,
-  field: "start" | "ampm" | "end",
+  field: "start" | "ampm" | "end" | "day",
   text: string,
+  today = "",
 ): SessionDraft | null {
+  if (field === "day" || (field === "end" && draft.activity === "meeting")) {
+    const onDate = calendarDate(text, today, field === "day");
+    if (onDate) {
+      return finishDraft({ ...draft, onDate, dayOffset: null, weekday: null, nextWeek: false });
+    }
+    const named = parseDraft(text);
+    if (named?.weekday != null && !named.start) {
+      return finishDraft({
+        ...draft,
+        onDate: null,
+        dayOffset: null,
+        weekday: named.weekday,
+        nextWeek: true,
+      });
+    }
+    if (field === "day") return null;
+  }
   if (field === "ampm") {
     const word = ampmWord(text);
     if (word) {
@@ -204,10 +244,12 @@ export function cleanName(text: string): string | null {
 }
 
 function isScheduleQuery(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  if (/^(what'?s |what is )?(the |my |our )?schedule\??$/.test(lower)) return true;
   return (
     /\bwhat'?s on\b/i.test(text) ||
-    /\bschedule\b/i.test(text) ||
-    /\bwhat(?:'s| is) on the calendar\b/i.test(text) ||
+    /\b(the|my|our|this week'?s) schedule\b/i.test(text) ||
+    /\bwhat(?:'s| is) (on the calendar|the schedule)\b/i.test(text) ||
     /\bwhat do we have\b/i.test(text) ||
     /\bthis week\?/i.test(text)
   );
@@ -229,7 +271,9 @@ function findActivity(lower: string): ActivityType | null {
       best = { index: match.index, activity };
     }
   }
-  return best?.activity ?? null;
+  if (best) return best.activity;
+  if (/\bschedule(?:d|ing)?\b/.test(lower) && !isScheduleQuery(lower)) return "plant";
+  return null;
 }
 
 function findRange(lower: string): {
@@ -288,7 +332,9 @@ function findCrop(lower: string): string | null {
   for (const crop of knownCrops()) {
     if (includesPhrase(lower, crop)) return canonicalCrop(crop);
   }
-  const planted = lower.match(/\b(?:planted|planting|sowed|sow)\s+([a-z][a-z ]{1,32}?)(?:\s+in\b|\s+on\b|\s+at\b|\s+for\b|$)/);
+  const planted = lower.match(
+    /\b(?:planted|planting|sowed|sow|schedule(?:d|ing)?)\s+(?:some\s+)?([a-z][a-z ]{1,32}?)(?:\s+in\b|\s+on\b|\s+at\b|\s+for\b|\s+from\b|\s+today\b|\s+yesterday\b|$)/,
+  );
   if (!planted) return null;
   const phrase = planted[1].replace(/\b(the|some|a|an|row|bed)\b/g, " ").replace(/\s+/g, " ").trim();
   if (!phrase || phrase.length < 3) return null;
@@ -310,4 +356,97 @@ function clock(hour: string, minute: string | undefined): { h: number; m: number
 function tokenAmpm(token: string | undefined): "am" | "pm" | null {
   if (!token) return null;
   return token.replace(/\./g, "").toLowerCase().startsWith("p") ? "pm" : "am";
+}
+
+const MONTH_NUMBER: Record<string, number> = {
+  january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3, april: 4, apr: 4,
+  may: 5, june: 6, jun: 6, july: 7, jul: 7, august: 8, aug: 8,
+  september: 9, sept: 9, sep: 9, october: 10, oct: 10, november: 11, nov: 11, december: 12, dec: 12,
+};
+
+const MONTH_PATTERN = Object.keys(MONTH_NUMBER).sort((a, b) => b.length - a.length).join("|");
+
+export function calendarDate(text: string, today: string, allowDayOnly = true): string | null {
+  const lower = text.trim().toLowerCase().replace(/,/g, "");
+  const parts = dateParts(lower, true);
+  if (!parts || !today) return null;
+  if (!allowDayOnly && parts.month === 0) return null;
+  return materializeDate(parts, today);
+}
+
+export function resolveStoredDate(onDate: string, today: string): string | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(onDate)) return onDate;
+  const match = onDate.match(/^(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return materializeDate({ month: Number(match[1]), day: Number(match[2]), year: null }, today);
+}
+
+function findExplicitDate(lower: string): string | null {
+  const parts = dateParts(lower, false);
+  if (!parts || parts.month === 0) return null;
+  if (parts.year) return materializeDate(parts, `${parts.year}-01-01`);
+  return `${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function dateParts(
+  lower: string,
+  whole: boolean,
+): { month: number; day: number; year: number | null } | null {
+  const ofMonth = new RegExp(
+    `${whole ? "^" : "\\b"}(?:on\\s+|the\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+of\\s+(${MONTH_PATTERN})(?:\\s+(\\d{4}))?${whole ? "$" : "\\b"}`,
+  ).exec(lower);
+  if (ofMonth) return partsFrom(Number(ofMonth[1]), MONTH_NUMBER[ofMonth[2]], ofMonth[3]);
+  const monthFirst = new RegExp(
+    `${whole ? "^" : "\\b"}(?:on\\s+)?(${MONTH_PATTERN})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+(\\d{4}))?${whole ? "$" : "\\b"}`,
+  ).exec(lower);
+  if (monthFirst) return partsFrom(Number(monthFirst[2]), MONTH_NUMBER[monthFirst[1]], monthFirst[3]);
+  const numeric = new RegExp(
+    `${whole ? "^" : "\\b"}(\\d{1,2})/(\\d{1,2})(?:/(\\d{2,4}))?${whole ? "$" : "\\b"}`,
+  ).exec(lower);
+  if (numeric) return partsFrom(Number(numeric[2]), Number(numeric[1]), numeric[3]);
+  if (!whole) return null;
+  const dayOnly = /^(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?$/.exec(lower);
+  if (!dayOnly) return null;
+  return partsFrom(Number(dayOnly[1]), 0, undefined);
+}
+
+function partsFrom(
+  day: number,
+  month: number,
+  year: string | undefined,
+): { month: number; day: number; year: number | null } | null {
+  if (day < 1 || day > 31) return null;
+  if (month !== 0 && (month < 1 || month > 12)) return null;
+  return { month, day, year: year ? Number(year) : null };
+}
+
+function materializeDate(
+  found: { month: number; day: number; year: number | null },
+  today: string,
+): string | null {
+  const [ty, tm, td] = today.split("-").map(Number);
+  if (!ty || !tm || !td) return null;
+  let year = found.year ?? ty;
+  if (found.year != null && found.year < 100) year += 2000;
+  let month = found.month;
+  if (month === 0) {
+    month = tm;
+    if (found.day < td) {
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
+    }
+  }
+  let iso = isoDate(year, month, found.day);
+  if (!iso) return null;
+  if (found.year == null && iso < today) iso = isoDate(year + 1, month, found.day);
+  return iso;
+}
+
+function isoDate(year: number, month: number, day: number): string | null {
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  if (utc.getUTCFullYear() !== year || utc.getUTCMonth() !== month - 1 || utc.getUTCDate() !== day) return null;
+  return utc.toISOString().slice(0, 10);
 }
