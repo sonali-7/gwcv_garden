@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { GardenMap } from "@/components/GardenMap";
 import { PlantList } from "@/components/PlantList";
+import { SketchImport } from "@/components/SketchImport";
 import { ViewTabs } from "@/components/ViewTabs";
 import type { GardenData } from "@/lib/garden-data";
 import { adviseBed, type Recommendation } from "@/lib/recommend";
@@ -27,6 +28,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -38,7 +40,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
 
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 3200);
+    const timer = window.setTimeout(() => setNotice(""), 6000);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
@@ -133,6 +135,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
           onSelect={setSelectedId}
           onMove={moveBed}
           onDropCrop={plan}
+          onImport={() => setImporting(true)}
           onAddBed={() =>
             run(async () => {
               const bed = await send<Bed>("/api/beds", "POST", {});
@@ -172,6 +175,27 @@ export function GardenView({ initial }: { initial: GardenData }) {
           }
         />
       </div>
+      <SketchImport
+        open={importing}
+        layout={data.layout}
+        onClose={() => setImporting(false)}
+        onDone={(result) => {
+          setImporting(false);
+          setSelectedId(null);
+          const bits = [
+            result.created ? `${result.created} new bed${result.created === 1 ? "" : "s"}` : "",
+            result.moved ? `${result.moved} moved` : "",
+            result.removed ? `${result.removed} removed` : "",
+          ].filter(Boolean);
+          setNotice(`Garden built: ${bits.join(", ") || "no changes"}.`);
+          if (result.kept.length) {
+            setError(
+              `Kept ${result.kept.join(", ")} because ${result.kept.length === 1 ? "it has" : "they have"} planting history. Use Edit layout to move or rename ${result.kept.length === 1 ? "it" : "them"}.`,
+            );
+          }
+          void reload();
+        }}
+      />
     </div>
   );
 }

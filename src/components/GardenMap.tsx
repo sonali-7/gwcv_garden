@@ -36,6 +36,7 @@ export function GardenMap(props: {
   onMove: (bed: Bed, geometry: Geometry) => void;
   onDropCrop: (bedId: string, crop: string) => void;
   onAddBed: () => void;
+  onImport: () => void;
   onLayout: (patch: Partial<GardenLayout> & { imageDataUrl?: string | null }) => void;
 }) {
   const { layout, editing } = props;
@@ -163,6 +164,20 @@ export function GardenMap(props: {
               {showPhoto ? "Hide photo" : "Show photo"}
             </button>
           ) : null}
+          <button
+            type="button"
+            className="icon-btn"
+            title="Turn a drawing of the garden into beds"
+            onClick={props.onImport}
+            disabled={props.busy}
+          >
+            <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+              <rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <rect x="5" y="5" width="10" height="3" fill="currentColor" />
+              <path d="M5 10.5h4v4.5H5zM11 10.5h4v4.5h-4z" fill="none" stroke="currentColor" strokeWidth="1.3" />
+            </svg>
+            <span>Import drawing</span>
+          </button>
           <button
             type="button"
             className="icon-btn"
