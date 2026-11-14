@@ -1097,10 +1097,12 @@ h1 {
   flex-wrap: wrap;
 }
 
+/* Same display font as the calendar's week title ("Nov 8–14, 2026"). */
 .timeline-date strong {
-  font-family: var(--font-pixel), ui-monospace, monospace;
-  font-size: 20px;
-  font-weight: 400;
+  font-family: var(--font-display), Georgia, serif;
+  font-size: 22px;
+  font-weight: 560;
+  letter-spacing: -0.02em;
 }
 
 .timeline-date span {
