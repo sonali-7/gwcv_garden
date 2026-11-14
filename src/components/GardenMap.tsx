@@ -12,8 +12,8 @@ type Drag = { id: string; mode: "move" | "resize"; startX: number; startY: numbe
 
 export const CROP_MIME = "application/x-garden-crop";
 
-/** Share of the map card's width the garden takes at Fit (zoom 1). */
-const FIT_WIDTH = 0.85;
+/** Page height taken by the header, timeline, map toolbar, and footer, so the garden at Fit fits in the rest. */
+const SPACE_ABOVE_AND_BELOW = 350;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
@@ -209,8 +209,9 @@ export function GardenMap(props: {
   const frameH = layout.lengthFt + margin * 2;
   const frameStyle: CSSProperties = {
     aspectRatio: `${frameW} / ${frameH}`,
-    // At Fit the garden takes 85% of the card's width, centred; zooming grows it from there.
-    width: `${zoom * FIT_WIDTH * 100}%`,
+    // At Fit the whole garden fits on screen: as wide as the card, but no taller than the window has room for
+    // below the header and timeline (and never tiny). Zooming grows it from there.
+    width: `calc(${zoom} * min(100%, max(320px, (100vh - ${SPACE_ABOVE_AND_BELOW}px) * ${(frameW / frameH).toFixed(4)})))`,
     backgroundImage: TILES.grass,
     backgroundSize: "24px 24px",
   };
