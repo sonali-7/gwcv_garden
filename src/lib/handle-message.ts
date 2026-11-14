@@ -381,6 +381,16 @@ async function commit(
       plantingId = created.id;
     }
     session.planting_id = plantingId;
+  } else if (activity === "harvest") {
+    const target = await resolveHarvestTarget(store, bed, planting, crop, interval.day);
+    if (target) {
+      await store.updatePlanting({ ...target, removed_date: interval.day });
+      plantingId = target.id;
+      session.planting_id = plantingId;
+      if (!session.bed_id) session.bed_id = target.bed_id;
+    } else if (plantingId) {
+      session.planting_id = plantingId;
+    }
   } else if (plantingId) {
     session.planting_id = plantingId;
   }
@@ -425,6 +435,13 @@ async function undo(
   const plantings = await store.listPlantings();
   for (const planting of plantings) {
     if (planting.source_session_id === last.id) await store.deletePlanting(planting.id);
+  }
+  if (last.activity_type === "harvest" && last.planting_id) {
+    const planting = plantings.find((item) => item.id === last.planting_id);
+    const day = todayYmd(new Date(last.start), person.timezone);
+    if (planting?.removed_date === day) {
+      await store.updatePlanting({ ...planting, removed_date: null });
+    }
   }
   const conversation = await store.getConversation(person.phone);
   await store.saveConversation(person.phone, {
@@ -529,6 +546,25 @@ async function wateringText(store: Store, now: Date, timeZone: string): Promise<
 
 function needsRow(activity: ActivityType): boolean {
   return activity === "plant" || activity === "weed" || activity === "water" || activity === "harvest" || activity === "prep";
+}
+
+/** Find the in-ground crop a harvest text is clearing, so the bed shows empty from that day on. */
+async function resolveHarvestTarget(
+  store: Store,
+  bed: Bed | null,
+  planting: Planting | null,
+  crop: string | null,
+  day: string,
+): Promise<Planting | null> {
+  if (planting && isActive(planting, day)) return planting;
+  const active = activePlantings(await store.listPlantings(), day);
+  const onBed = bed ? active.filter((item) => item.bed_id === bed.id) : active;
+  if (crop) {
+    const named = onBed.find((item) => item.crop.toLowerCase() === crop.toLowerCase());
+    if (named) return named;
+  }
+  if (onBed.length === 1) return onBed[0];
+  return null;
 }
 
 export function resolveInterval(

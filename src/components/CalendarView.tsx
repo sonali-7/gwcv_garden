@@ -5,9 +5,10 @@ import {
   DAY_END,
   DAY_START,
   HOUR_PX,
+  VIEW_HOURS,
+  VIEW_START,
   dayNumber,
   hourLabel,
-  outsideDayGrid,
   placeSlices,
   sessionStatus,
   sessionTouchesWeek,
@@ -44,6 +45,7 @@ export function CalendarView({
   onSelect: (id: string | null) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   const [clock, setClock] = useState(() => Date.now());
@@ -52,16 +54,24 @@ export function CalendarView({
     const timer = window.setInterval(() => setClock(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+    node.scrollTop = VIEW_START * HOUR_PX;
+  }, [weekStart]);
+
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   const visible = sessions.filter((session) => sessionTouchesWeek(session, weekStart, timezone));
   const placed = placeSlices(visible.flatMap((session) => slicesForSession(session, weekStart, timezone)));
-  const offHours = visible.filter((session) => outsideDayGrid(session, weekStart, timezone));
-  const hours = Array.from({ length: DAY_END - DAY_START + 1 }, (_, index) => DAY_START + index);
+  const hours = Array.from({ length: DAY_END - DAY_START }, (_, index) => DAY_START + index);
+  const gridHeight = (DAY_END - DAY_START) * HOUR_PX;
+  const viewHeight = VIEW_HOURS * HOUR_PX;
   const now = new Date(clock);
   const nowParts = partsInZone(now, timezone);
   const nowDay = ymd(nowParts);
-  const showNow = days.includes(nowDay) && nowParts.hour >= DAY_START && nowParts.hour < DAY_END;
-  const nowTop = ((nowParts.hour - DAY_START) * 60 + nowParts.minute) / 60 * HOUR_PX;
+  const showNow = days.includes(nowDay);
+  const nowTop = (nowParts.hour * 60 + nowParts.minute) / 60 * HOUR_PX;
   const selected = sessions.find((session) => session.id === selectedId) ?? null;
 
   useLayoutEffect(() => {
@@ -94,7 +104,7 @@ export function CalendarView({
       const target = event.target;
       if (!(target instanceof Node)) return;
       if (popRef.current?.contains(target)) return;
-      if (target instanceof Element && target.closest(".event, .offhours button")) return;
+      if (target instanceof Element && target.closest(".event")) return;
       onSelect(null);
     }
     document.addEventListener("mousedown", down);
@@ -116,7 +126,7 @@ export function CalendarView({
           <span><i className="key planned" />Planned</span>
         </span>
       </div>
-      <div className="cal-scroll">
+      <div className="cal-scroll" ref={scrollRef} style={{ height: viewHeight }}>
         <div className="cal-grid" style={{ ["--hour" as string]: `${HOUR_PX}px` }}>
           <div className="gutter-head" />
           {days.map((day) => (
@@ -125,7 +135,7 @@ export function CalendarView({
               <strong>{dayNumber(day)}</strong>
             </div>
           ))}
-          <div className="gutter" style={{ height: (DAY_END - DAY_START) * HOUR_PX }}>
+          <div className="gutter" style={{ height: gridHeight }}>
             {hours.map((hour) => (
               <span key={hour} style={{ top: (hour - DAY_START) * HOUR_PX }}>
                 {hourLabel(hour)}
@@ -133,8 +143,8 @@ export function CalendarView({
             ))}
           </div>
           {days.map((day) => (
-            <div key={day} className={day === today ? "day-col today" : "day-col"} style={{ height: (DAY_END - DAY_START) * HOUR_PX }}>
-              {hours.slice(0, -1).map((hour) => (
+            <div key={day} className={day === today ? "day-col today" : "day-col"} style={{ height: gridHeight }}>
+              {hours.map((hour) => (
                 <div key={hour} className="hour-line" style={{ top: (hour - DAY_START) * HOUR_PX }} />
               ))}
               {showNow && day === nowDay ? <div className="now-line" style={{ top: nowTop }} /> : null}
@@ -181,25 +191,6 @@ export function CalendarView({
           ))}
         </div>
       </div>
-      {offHours.length > 0 ? (
-        <div className="offhours">
-          <span>Outside 7am–7pm</span>
-          {offHours.map((session) => {
-            const person = people.find((item) => item.id === session.person_id);
-            return (
-              <button
-                key={session.id}
-                type="button"
-                data-session-id={session.id}
-                onClick={() => onSelect(session.id === selectedId ? null : session.id)}
-              >
-                <i style={{ background: person?.color }} />
-                {person?.name}: {session.notes}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
       {selected && box ? (
         <div
           className="session-pop"
