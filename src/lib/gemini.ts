@@ -51,3 +51,17 @@ export async function geminiText(
   }
   throw new Error(`Gemini ${lastStatus}`);
 }
+
+/** A short message a gardener can act on, for an error thrown by geminiText (or a timeout). */
+export function explainGeminiError(error: unknown): string {
+  const models = geminiModels().join(" / ");
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return `Gemini (${models}) took too long. Try again, or set GEMINI_MODEL to a faster model.`;
+  }
+  const status = Number(/Gemini (\d+)/.exec(error instanceof Error ? error.message : "")?.[1]);
+  if (status === 429) return `Gemini's request limit is used up (${models}). Try later or pick another GEMINI_MODEL.`;
+  if (status === 404) return `Gemini doesn't offer "${models}" to this key. Check GEMINI_MODEL.`;
+  if (status === 400 || status === 403) return "Gemini rejected the request. Check GEMINI_API_KEY.";
+  if (status) return `Gemini returned an error (${status}).`;
+  return "Couldn't reach Gemini.";
+}

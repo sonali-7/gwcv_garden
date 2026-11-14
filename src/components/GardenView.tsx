@@ -9,7 +9,7 @@ import { PlantList } from "@/components/PlantList";
 import { SketchImport } from "@/components/SketchImport";
 import { ViewTabs } from "@/components/ViewTabs";
 import type { GardenData } from "@/lib/garden-data";
-import { clearing, cropsInPatch, dropSituation, isEstablished, replacementDate, type Occupant } from "@/lib/drop-plan";
+import { canDelete, clearing, cropsInPatch, dropSituation, isEstablished, replacementDate, type Occupant } from "@/lib/drop-plan";
 import { adviseBed, guideFor, type Recommendation } from "@/lib/recommend";
 import type { Bed, GardenLayout } from "@/lib/types";
 
@@ -28,6 +28,8 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T |
 export function GardenView({ initial }: { initial: GardenData }) {
   const [data, setData] = useState(initial);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The plot whose name is being edited (double-click its name in the plant list, or the plot on the map).
+  const [renamingId, setRenamingId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -41,7 +43,8 @@ export function GardenView({ initial }: { initial: GardenData }) {
   const [removing, setRemoving] = useState<{ bedId: string; there: Occupant[] } | null>(null);
   const mode: "past" | "today" | "future" = day === data.today ? "today" : day < data.today ? "past" : "future";
 
-  // Escape deselects; Delete or Backspace removes the selected patch's plant (asking which, if there are several).
+  // Escape deselects. Delete or Backspace removes the selected patch itself in Edit layout; otherwise it removes
+  // the patch's plant (asking which, if there are several).
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") setSelectedId(null);
@@ -50,8 +53,12 @@ export function GardenView({ initial }: { initial: GardenData }) {
       if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
       if (!selectedId || mode === "past" || busy || document.querySelector("dialog[open]")) return;
       event.preventDefault();
-      const there = cropsInPatch(selectedId, data.plantings, day, data.today);
       const bed = data.beds.find((item) => item.id === selectedId);
+      if (editing) {
+        if (bed) deleteBed(bed);
+        return;
+      }
+      const there = cropsInPatch(selectedId, data.plantings, day, data.today);
       if (!there.length) {
         setNotice(`Nothing growing or planned in ${bed?.name ?? "this bed"} to remove.`);
         return;
@@ -149,6 +156,28 @@ export function GardenView({ initial }: { initial: GardenData }) {
           ? `Planned ${crop} alongside the ${company.join(" and ")} in ${bed.name} on ${label}.`
           : `Planned ${crop} for ${bed.name} on ${label}.`,
       );
+    });
+  }
+
+  /**
+   * Remove a patch from the map, with any plans in it that haven't started. A patch with real planting history
+   * stays (rotation needs it), the same rule the server enforces; say so up front instead of asking first.
+   */
+  function deleteBed(bed: Bed) {
+    const mine = data.plantings.filter((planting) => planting.bed_id === bed.id);
+    if (mine.some((planting) => !canDelete(planting, data.today))) {
+      setError(`${bed.name} has planting history, so it stays. Rename or move it instead.`);
+      return;
+    }
+    const plans = [...new Set(mine.map((planting) => planting.crop))];
+    const question = plans.length
+      ? `Remove ${bed.name} from the map, and its plan for ${plans.join(" and ")}?`
+      : `Remove ${bed.name} from the map?`;
+    if (!window.confirm(question)) return;
+    run(async () => {
+      await send(`/api/beds/${bed.id}`, "DELETE");
+      setSelectedId(null);
+      setNotice(`Removed ${bed.name}.`);
     });
   }
 
@@ -252,9 +281,9 @@ export function GardenView({ initial }: { initial: GardenData }) {
         </div>
       </header>
       {error ? <p className="banner">{error}</p> : null}
+      <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
       <div className="garden-workspace">
         <div className="garden-main">
-        <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
         <GardenMap
           layout={data.layout}
           beds={data.beds}
@@ -267,6 +296,10 @@ export function GardenView({ initial }: { initial: GardenData }) {
           editing={editing}
           busy={busy}
           onSelect={setSelectedId}
+          onStartRename={(id) => {
+            setSelectedId(id);
+            setRenamingId(id);
+          }}
           onMove={moveBed}
           onDropCrop={dropCrop}
           onImport={() => setImporting(true)}
@@ -292,18 +325,15 @@ export function GardenView({ initial }: { initial: GardenData }) {
           busy={busy}
           onSelect={setSelectedId}
           onPlan={planFromCard}
+          renamingId={renamingId}
+          onStartRename={setRenamingId}
+          onStopRename={() => setRenamingId(null)}
           onRename={(bed, name) =>
             run(async () => {
               await send(`/api/beds/${bed.id}`, "PATCH", { name });
             })
           }
-          onDeleteBed={(bed) => {
-            if (!window.confirm(`Remove ${bed.name} from the map?`)) return;
-            run(async () => {
-              await send(`/api/beds/${bed.id}`, "DELETE");
-              setSelectedId(null);
-            });
-          }}
+          onDeleteBed={deleteBed}
           onRemove={removeCrops}
         />
       </div>

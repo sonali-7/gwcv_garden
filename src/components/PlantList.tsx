@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CROP_MIME } from "@/components/GardenMap";
 import { spriteUrl } from "@/lib/pixel-sprites";
+import type { BedIdea } from "@/lib/bed-ideas";
 import type { GardenData } from "@/lib/garden-data";
 import type { BedAdvice, Recommendation } from "@/lib/recommend";
 import type { Bed, Planting } from "@/lib/types";
@@ -53,6 +54,10 @@ export function PlantList(props: {
   onSelect: (id: string | null) => void;
   onPlan: (bedId: string, crop: string, how?: "after" | "alongside" | "replace") => void;
   onRename: (bed: Bed, name: string) => void;
+  /** The plot whose name is being edited (double-click its name here or on the map), if any. */
+  renamingId: string | null;
+  onStartRename: (id: string) => void;
+  onStopRename: () => void;
   onDeleteBed: (bed: Bed) => void;
   /** Take crops out of a patch: plans are deleted, anything planted is marked pulled on the date shown. */
   onRemove: (plantingIds: string[]) => void;
@@ -60,7 +65,7 @@ export function PlantList(props: {
   const { selected } = props;
   return (
     <aside className="plant-list" aria-label="Plant list">
-      {selected ? <BedDetail {...props} bed={selected} /> : <Overview {...props} />}
+      {selected ? <BedDetail key={selected.id} {...props} bed={selected} /> : <Overview {...props} />}
     </aside>
   );
 }
@@ -103,11 +108,11 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
         </div>
       ) : null}
       <ul className="bed-rows">
-        {data.beds.map((bed) => {
+        {byHarvest(data.beds, advice).map((bed) => {
           const a = advice.get(bed.id);
-          const now = a?.current[0];
+          const now = soonestHarvest(a?.current ?? []);
           const next = a?.planned[0];
-          const others = (a?.current ?? []).slice(1).map((p) => p.crop);
+          const others = (a?.current ?? []).filter((p) => p !== now).map((p) => p.crop);
           const nextCrops = [...new Set((a?.planned ?? []).filter((p) => p.planted_date === next?.planted_date).map((p) => p.crop))];
           return (
             <li key={bed.id}>
@@ -136,6 +141,31 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
       </ul>
     </>
   );
+}
+
+/** The growing crop due to be harvested first (trees, which have no real harvest date, go last). */
+function soonestHarvest(current: Planting[]): Planting | undefined {
+  const key = (p: Planting) => (p.crop.toLowerCase().includes("tree") ? "9999" : p.expected_harvest_date);
+  return [...current].sort((x, y) => key(x).localeCompare(key(y)))[0];
+}
+
+/**
+ * Plant list order: empty plots first, then planted ones by harvest date (soonest or overdue on top),
+ * then plots that only have plans, by when they go in. Ties go by name, with numbers in order (Plot 2 before Plot 10).
+ */
+function byHarvest(beds: Bed[], advice: Map<string, BedAdvice>): Bed[] {
+  const rank = (bed: Bed): [number, string] => {
+    const a = advice.get(bed.id);
+    const growing = soonestHarvest(a?.current ?? []);
+    if (growing) return [1, growing.crop.toLowerCase().includes("tree") ? "9999" : growing.expected_harvest_date];
+    if (a?.planned[0]) return [2, a.planned[0].planted_date];
+    return [0, ""];
+  };
+  return [...beds].sort((x, y) => {
+    const [gx, kx] = rank(x);
+    const [gy, ky] = rank(y);
+    return gx - gy || kx.localeCompare(ky) || x.name.localeCompare(y.name, undefined, { numeric: true });
+  });
 }
 
 function statusLine(planting: Planting, today: string): string {
@@ -171,21 +201,33 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
       <button type="button" className="back" onClick={() => props.onSelect(null)}>
         ‹ All beds
       </button>
-      {props.editing ? (
+      {props.editing || props.renamingId === bed.id ? (
         <input
           className="bed-name-input"
           defaultValue={bed.name}
           key={bed.id + bed.name}
-          aria-label="Bed name"
+          aria-label="Plot name"
+          autoFocus={props.renamingId === bed.id}
+          onFocus={(event) => event.target.select()}
           onBlur={(event) => {
-            if (event.target.value.trim() && event.target.value.trim() !== bed.name) props.onRename(bed, event.target.value);
+            const name = event.target.value.trim();
+            if (event.target.dataset.cancel !== "1" && name && name !== bed.name) props.onRename(bed, name);
+            props.onStopRename();
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+            const input = event.target as HTMLInputElement;
+            if (event.key === "Enter") input.blur();
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              input.dataset.cancel = "1";
+              input.blur();
+            }
           }}
         />
       ) : (
-        <h2>{bed.name}</h2>
+        <h2 className="bed-name" title="Double-click to rename" onDoubleClick={() => props.onStartRename(bed.id)}>
+          {bed.name}
+        </h2>
       )}
       <p className="sub">
         {g ? `${showSize(g.w, g.h, data.layout.units ?? "ft")} · ${showArea(g.w, g.h, data.layout.units ?? "ft")}` : "Not on the map yet"}
@@ -363,6 +405,8 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
       </section>
       )}
 
+      {props.mode === "past" ? null : <GeminiIdeas {...props} bed={bed} occupant={occupant} />}
+
       {a.history.length ? (
         <section className="block">
           <h3>Past seasons</h3>
@@ -422,4 +466,136 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
 
 function uniqueReasons(a: BedAdvice): string {
   return [...new Set(a.avoid.map((item) => item.reason))].join(" ");
+}
+
+type IdeasState = { status: "idle" } | { status: "busy" } | { status: "done"; ideas: BedIdea[] } | { status: "error"; message: string };
+
+/** Answers already fetched this session, by bed and date, so reopening a bed doesn't spend another request. */
+const ideaCache = new Map<string, BedIdea[]>();
+
+/**
+ * Crops Gemini suggests for this bed on the date shown: right for the month and season, good neighbors for
+ * what's in and next to the bed, and never from a family rotation rules out (the server checks).
+ * Only asks when the button is pressed, to save the daily quota.
+ */
+function GeminiIdeas(props: Parameters<typeof PlantList>[0] & { bed: Bed; occupant: string | null }) {
+  const { bed, data, occupant } = props;
+  const key = `${bed.id}|${data.today}`;
+  const fromCache = (): IdeasState => {
+    const cached = ideaCache.get(key);
+    return cached ? { status: "done", ideas: cached } : { status: "idle" };
+  };
+  const [state, setState] = useState<IdeasState>(fromCache);
+  // Moving the timeline to another date shows that date's answer (or the button again).
+  const [stateKey, setStateKey] = useState(key);
+  if (stateKey !== key) {
+    setStateKey(key);
+    setState(fromCache());
+  }
+  const shown = state;
+
+  async function ask() {
+    setState({ status: "busy" });
+    try {
+      const response = await fetch(`/api/beds/${bed.id}/ideas`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ day: data.today }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { ideas?: BedIdea[]; error?: string };
+      if (!response.ok || !body.ideas) throw new Error(body.error || "Couldn't get ideas from Gemini.");
+      ideaCache.set(key, body.ideas);
+      setState({ status: "done", ideas: body.ideas });
+    } catch (err) {
+      setState({ status: "error", message: err instanceof Error ? err.message : "Couldn't get ideas from Gemini." });
+    }
+  }
+
+  const earliest = data.today;
+  return (
+    <section className="block ideas">
+      <h3>Ideas from Gemini</h3>
+      {shown.status === "done" ? (
+        <>
+          <div className="recs">
+            {shown.ideas.map((idea) => (
+              <article
+                key={idea.crop}
+                className="rec idea"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.setData(CROP_MIME, idea.crop);
+                  event.dataTransfer.setData("text/plain", idea.crop);
+                  event.dataTransfer.effectAllowed = "copy";
+                }}
+              >
+                <header>
+                  <Sprite crop={idea.crop} sprites={data.sprites} size={30} />
+                  <strong>{title(idea.crop)}</strong>
+                  <span className={idea.plantOn <= earliest || idea.plantOn === nextDay(earliest) ? "chip now" : "chip"}>
+                    {idea.plantOn <= earliest || idea.plantOn === nextDay(earliest)
+                      ? props.mode === "future"
+                        ? "Plant then"
+                        : "Plant now"
+                      : `From ${shortDate(idea.plantOn, idea.plantOn.slice(0, 4) !== data.today.slice(0, 4))}`}
+                  </span>
+                </header>
+                <ul className="why">
+                  <li>{idea.reason}</li>
+                  {idea.neighbors ? <li>{idea.neighbors}</li> : null}
+                </ul>
+                {idea.known ? null : (
+                  <p className="idea-new">New to this app: no drawing yet, and check its rotation yourself.</p>
+                )}
+                <footer>
+                  <a href={seedLink(idea.crop, data.layout.location)} target="_blank" rel="noreferrer">
+                    Find seeds nearby ↗
+                  </a>
+                  {occupant ? (
+                    <span className="rec-actions">
+                      <button type="button" className="pill" onClick={() => props.onPlan(bed.id, idea.crop, "replace")} disabled={props.busy} title={`Take out the ${occupant} and plant ${idea.crop} instead`}>
+                        Replace
+                      </button>
+                      <button type="button" className="pill" onClick={() => props.onPlan(bed.id, idea.crop, "alongside")} disabled={props.busy} title={`Share the bed with the ${occupant}`}>
+                        Alongside
+                      </button>
+                      <button type="button" className="pill" onClick={() => props.onPlan(bed.id, idea.crop, "after")} disabled={props.busy} title={`After the ${occupant}`}>
+                        After
+                      </button>
+                    </span>
+                  ) : (
+                    <button type="button" className="pill" onClick={() => props.onPlan(bed.id, idea.crop)} disabled={props.busy}>
+                      Add to plan
+                    </button>
+                  )}
+                </footer>
+              </article>
+            ))}
+          </div>
+          <button type="button" className="texty small" onClick={() => void ask()}>
+            Ask again
+          </button>
+        </>
+      ) : (
+        <div className="ideas-ask">
+          <p className="quiet small">
+            Gemini looks up crops for {shortDate(data.today, true)}: what suits the season
+            {data.layout.location ? ` near ${data.layout.location}` : ""}, and what grows well next to
+            {occupant ? ` the ${occupant}` : " the beds around it"}. Rotation is still checked.
+            {data.layout.location ? "" : " Set your town under Near in Edit layout for local advice."}
+          </p>
+          <button type="button" className="pill" onClick={() => void ask()} disabled={shown.status === "busy"}>
+            {shown.status === "busy" ? "Asking Gemini…" : "Ask Gemini"}
+          </button>
+          {shown.status === "error" ? <p className="ideas-error" role="alert">{shown.message}</p> : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function nextDay(day: string): string {
+  const date = new Date(`${day}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
 }

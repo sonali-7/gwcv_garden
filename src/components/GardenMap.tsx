@@ -43,6 +43,8 @@ export function GardenMap(props: {
   editing: boolean;
   busy: boolean;
   onSelect: (id: string | null) => void;
+  /** Double-click on a plot: select it and start renaming it in the plant list. */
+  onStartRename: (id: string) => void;
   onMove: (bed: Bed, geometry: Geometry) => void;
   onDropCrop: (bedId: string, crop: string) => void;
   onAddBed: () => void;
@@ -51,10 +53,8 @@ export function GardenMap(props: {
 }) {
   const { layout, editing } = props;
   const surface = useRef<HTMLDivElement>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
-  const [showPhoto, setShowPhoto] = useState(true);
   const [pxPerFt, setPxPerFt] = useState(20);
   // Zoom makes the map wider than its card; the viewport around it scrolls.
   const viewport = useRef<HTMLDivElement>(null);
@@ -176,22 +176,6 @@ export function GardenMap(props: {
     if (bed && moved) props.onMove(bed, drag.current);
   }
 
-  function pickPhoto(file: File | undefined) {
-    if (!file) return;
-    if (file.size > 4_000_000) {
-      window.alert("Pick a photo under 4MB.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        props.onLayout({ imageDataUrl: reader.result });
-        setShowPhoto(true);
-      }
-    };
-    reader.readAsDataURL(file);
-  }
-
   const units: Units = layout.units ?? "ft";
   const step = gridStepFt(units);
   const gridX = (step / layout.widthFt) * 100;
@@ -260,11 +244,6 @@ export function GardenMap(props: {
               +
             </button>
           </div>
-          {layout.imageUrl ? (
-            <button type="button" className="texty" onClick={() => setShowPhoto((v) => !v)}>
-              {showPhoto ? "Hide photo" : "Show photo"}
-            </button>
-          ) : null}
           <button
             type="button"
             className="icon-btn"
@@ -279,30 +258,6 @@ export function GardenMap(props: {
             </svg>
             <span>Import drawing</span>
           </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title="Upload a photo or aerial image of the garden"
-            onClick={() => fileInput.current?.click()}
-            disabled={props.busy}
-          >
-            <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-              <rect x="2.5" y="4.5" width="15" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-              <circle cx="7" cy="9" r="1.6" fill="currentColor" />
-              <path d="M3.5 14l4.5-4 3 3 2-2 4 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            </svg>
-            <span>{layout.imageUrl ? "Replace photo" : "Upload photo"}</span>
-          </button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
-            className="sr"
-            onChange={(event) => {
-              pickPhoto(event.target.files?.[0]);
-              event.target.value = "";
-            }}
-          />
         </div>
       </div>
 
@@ -333,10 +288,6 @@ export function GardenMap(props: {
           if (event.target === event.currentTarget) props.onSelect(null);
         }}
       >
-        {layout.imageUrl && showPhoto ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img className="map-photo" src={layout.imageUrl} alt="" draggable={false} />
-        ) : null}
         {shapePct ? (
           <>
             <div
@@ -408,10 +359,18 @@ export function GardenMap(props: {
                 event.stopPropagation();
                 if (!drag) props.onSelect(bed.id);
               }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                props.onStartRename(bed.id);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   props.onSelect(bed.id);
+                }
+                if (event.key === "F2") {
+                  event.preventDefault();
+                  props.onStartRename(bed.id);
                 }
               }}
               onPointerDown={(event) => startDrag(event, bed, "move")}
@@ -533,11 +492,6 @@ export function GardenMap(props: {
                 }}
               />
             </label>
-            {layout.imageUrl ? (
-              <button type="button" className="texty" onClick={() => props.onLayout({ imageDataUrl: null })}>
-                Remove photo
-              </button>
-            ) : null}
             <button type="button" className="pill" onClick={props.onAddBed} disabled={props.busy}>
               + Add bed
             </button>
