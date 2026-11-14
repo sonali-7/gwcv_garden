@@ -32,10 +32,20 @@ export async function POST(request: Request) {
   if (!geometry) return json({ error: "There's no open ground left. Make a bed smaller or remove one first." }, 409);
   const bed: Bed = {
     id: `bed-${randomUUID().slice(0, 8)}`,
-    name: cleanName(body?.name, `Bed ${beds.length + 1}`),
+    name: cleanName(body?.name, nextPlotName(beds)),
     row: cleanName(body?.row, ""),
     geometry,
   };
   await store.insertBed(bed);
   return json(bed, 201);
+}
+
+/** "Plot N" with the lowest N not already used by a plot on the map. */
+function nextPlotName(beds: Bed[]): string {
+  const used = new Set(
+    beds.filter((bed) => !bed.archived).map((bed) => /^plot (\d+)$/i.exec(bed.name.trim())?.[1]).filter(Boolean).map(Number),
+  );
+  let n = 1;
+  while (used.has(n)) n += 1;
+  return `Plot ${n}`;
 }
