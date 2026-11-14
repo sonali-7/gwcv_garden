@@ -5,6 +5,7 @@ import { CalendarView } from "@/components/CalendarView";
 import { DetailCard } from "@/components/DetailCard";
 import { Phone } from "@/components/Phone";
 import { PriorityPanel } from "@/components/PriorityPanel";
+import { ViewTabs } from "@/components/ViewTabs";
 import { addDays, formatWeekTitle, startOfWeekYmd } from "@/lib/time";
 import type { DashboardData } from "@/lib/types";
 
@@ -83,6 +84,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
             <p className="eyebrow">GWCV garden</p>
             <h1>Calendar view</h1>
           </div>
+          <ViewTabs current="calendar" />
         </div>
         <div className="week-nav">
           <button type="button" onClick={() => shift(-7)} disabled={busy} aria-label="Previous week">

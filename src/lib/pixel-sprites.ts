@@ -1,0 +1,526 @@
+import { canonicalCrop, familyOf } from "./crops";
+
+/**
+ * Hand-drawn 16×16 pixel sprites, one character per pixel. "." is transparent.
+ * To replace one with your own drawing, drop a PNG in public/sprites/ named after
+ * the crop (carrots.png, sweet-potato.png) or the sprite key below (leafy.png).
+ */
+const BASE: Record<string, string> = {
+  ".": "",
+  k: "#2b1d14",
+  g: "#4f9a3c",
+  G: "#2f6b2a",
+  l: "#8fcf5a",
+  o: "#e8822a",
+  O: "#b55a17",
+  r: "#d4433a",
+  R: "#8f2a24",
+  p: "#8a63c4",
+  P: "#5b3f8f",
+  q: "#b89be0",
+  w: "#f6efdc",
+  y: "#e8c547",
+  Y: "#b8912a",
+  b: "#8a5a32",
+  B: "#5a3a1f",
+  m: "#b8475a",
+  M: "#7f2f3e",
+  s: "#e59ab0",
+  c: "#5fb7e8",
+  C: "#2f7fb8",
+};
+
+type Sprite = { rows: string[]; palette?: Record<string, string> };
+
+export const SPRITES: Record<string, Sprite> = {
+  carrot: {
+    rows: [
+      "......g..g......",
+      "...g..g.g...g...",
+      "....g..gg..g....",
+      ".....g.gg.g.....",
+      "......gGGg......",
+      ".....kooooOk....",
+      ".....kowooOk....",
+      ".....koooOOk....",
+      "......kooOk.....",
+      "......kOooOk....",
+      "......kooOk.....",
+      ".......koOk.....",
+      ".......kok......",
+      ".......kok......",
+      "........k.......",
+      "................",
+    ],
+  },
+  sweetpotato: {
+    rows: [
+      "................",
+      "....gg....gg....",
+      "...glgg..gglg...",
+      "...gggg..gggg...",
+      "....gg.gg.gg....",
+      "......gGGg......",
+      ".......Gg.......",
+      "....kkkkkkkk....",
+      "...kmmmmmmmMk...",
+      "..kmsmmmmmmmMk..",
+      "..kmmmmmmmmmMk..",
+      "...kmmmmmmMMk...",
+      "....kkkkkkkk....",
+      "................",
+      "................",
+      "................",
+    ],
+  },
+  potato: {
+    rows: [
+      "................",
+      "....gg....gg....",
+      "...glgg..gglg...",
+      "...gggg..gggg...",
+      "....gg.gg.gg....",
+      "......gGGg......",
+      ".......Gg.......",
+      "....kkkkkkkk....",
+      "...kmmmmmmmMk...",
+      "..kmsmmMmmmmMk..",
+      "..kmmmmmmmMmMk..",
+      "...kmmMmmmMMk...",
+      "....kkkkkkkk....",
+      "................",
+      "................",
+      "................",
+    ],
+    palette: { m: "#c79a5b", M: "#8a6436", s: "#e6c48a" },
+  },
+  cabbage: {
+    rows: [
+      "................",
+      "..kkk......kkk..",
+      ".kqppk....kppqk.",
+      ".kqpPpkkkkpPpqk.",
+      "..kpPkqqqqkPpk..",
+      ".kppkqqwwqqkppk.",
+      "kqpkqqwqqwqqkpqk",
+      "kqpkqwqqqqwqkpqk",
+      "kppkqqwqqwqqkppk",
+      ".kpPkqqwwqqkPpk.",
+      ".kpPPkqqqqkPPpk.",
+      "..kpPPkkkkPPpk..",
+      "...kkpPPPPpkk...",
+      ".....kkkkkk.....",
+      "................",
+      "................",
+    ],
+  },
+  broccoli: {
+    rows: [
+      "................",
+      "....kkk..kkk....",
+      "...kgGgkkgGgk...",
+      "..kgGgGgGgGgGk..",
+      "..kGgGgGgGgGgk..",
+      "...kGgGgGgGgk...",
+      "....kkGllGkk....",
+      "......kllk......",
+      "......klgk......",
+      "......klgk......",
+      ".....kllggk.....",
+      ".....kkkkkk.....",
+      "................",
+      "................",
+      "................",
+      "................",
+    ],
+  },
+  leafy: {
+    rows: [
+      "................",
+      "......k..k......",
+      ".....klkklk.....",
+      "..kk.klgglk.kk..",
+      ".kllkkglglkkllk.",
+      ".klggklglgkgglk.",
+      "..kgglkgGkglggk.",
+      "...kggkGGkggk...",
+      ".kkkgglGGlggkkk.",
+      "klllgggGGggglllk",
+      ".kggggGGGGggggk.",
+      "..kkkkGGGGkkkk..",
+      "......kkkk......",
+      "................",
+      "................",
+      "................",
+    ],
+  },
+  tree: {
+    rows: [
+      "......kkkk......",
+      "....kkllggkk....",
+      "...klllgggGGk...",
+      "..kllggggggGGk..",
+      "..klgggggggGGk..",
+      ".kllggggggggGGk.",
+      ".klgggggggggGGk.",
+      ".kggggggggggGGk.",
+      "..kgggggggGGGk..",
+      "..kGgggggGGGGk..",
+      "...kkGGGGGGkk...",
+      ".....kkbBkk.....",
+      "......kbBk......",
+      "......kbBk......",
+      ".....kbbBBk.....",
+      "................",
+    ],
+  },
+  garlic: {
+    rows: [
+      ".......g........",
+      "......g.g.......",
+      ".....g..g..g....",
+      "......g.g.g.....",
+      ".......ggg......",
+      ".......kGk......",
+      "......kwwwk.....",
+      ".....kwwswwk....",
+      "....kwwwswwwk...",
+      "....kwswwwswk...",
+      "....kwswwwswk...",
+      "....kwwswswwk...",
+      ".....kwwwwwk....",
+      "......kkkkk.....",
+      "......B.B.B.....",
+      "................",
+    ],
+  },
+  onion: {
+    rows: [
+      ".......g........",
+      "......g.g.......",
+      ".....g..g..g....",
+      "......g.g.g.....",
+      ".......ggg......",
+      ".......kGk......",
+      "......kwwwk.....",
+      ".....kwwswwk....",
+      "....kwwwswwwk...",
+      "....kwswwwswk...",
+      "....kwswwwswk...",
+      "....kwwswswwk...",
+      ".....kwwwwwk....",
+      "......kkkkk.....",
+      "......B.B.B.....",
+      "................",
+    ],
+    palette: { w: "#c97fb4", s: "#8e4b7c" },
+  },
+  pod: {
+    rows: [
+      "................",
+      "...gg......gg...",
+      "..glgg....gglg..",
+      "..gggggGGggggg..",
+      "...gg..GG..gg...",
+      "...k...GG...k...",
+      "..klk..GG..klk..",
+      "..klk..GG..klk..",
+      "..kgk.kGGk.kgk..",
+      "..klk.klgk.klk..",
+      "..kgk.kglk.kgk..",
+      "..klk.klgk.klk..",
+      "...k..kglk..k...",
+      "......klgk......",
+      ".......kk.......",
+      "................",
+    ],
+  },
+  clover: {
+    rows: [
+      "................",
+      "......kkkk......",
+      ".....kllllk.....",
+      ".....klggGk.....",
+      "..kkk.kgGk.kkk..",
+      ".klllk.kk.klllk.",
+      ".kllgGkGGkGgllk.",
+      "..kgGk.G..kGgk..",
+      "...kk..G...kk...",
+      ".......G........",
+      "......G.........",
+      "......G.........",
+      "................",
+      "................",
+      "................",
+      "................",
+    ],
+    palette: { l: "#a5dd8a", g: "#3f9a6a", G: "#2a6b4a" },
+  },
+  tomato: {
+    rows: [
+      "................",
+      ".......Gg.......",
+      ".....gGGGGg.....",
+      "....kkgGGgkk....",
+      "...krrrggrrrk...",
+      "..krwrrrrrrrRk..",
+      "..krwrrrrrrrRk..",
+      ".krrrrrrrrrrrRk.",
+      ".krrrrrrrrrrrRk.",
+      ".krrrrrrrrrrRRk.",
+      "..krrrrrrrrRRk..",
+      "..kRrrrrrrRRRk..",
+      "...kkRRRRRRkk...",
+      ".....kkkkkk.....",
+      "................",
+      "................",
+    ],
+  },
+  pepper: {
+    rows: [
+      "................",
+      ".......gG.......",
+      "......kgGk......",
+      ".....kgggGk.....",
+      "....krrgGrrk....",
+      "...krwrrrrrRk...",
+      "...krwrrrrrRk...",
+      "...krrrrrrrRk...",
+      "...krrrrrrRRk...",
+      "....krrrrrRk....",
+      "....krrrrRRk....",
+      ".....krrRRk.....",
+      ".....krRRk......",
+      "......kRk.......",
+      ".......k........",
+      "................",
+    ],
+    palette: { r: "#e0612e", R: "#a83a1c" },
+  },
+  corn: {
+    rows: [
+      ".......y........",
+      "......kyk.......",
+      ".....kyYyk......",
+      "..g..kYyYk..g...",
+      "...g.kyYyk.g....",
+      "...gkkYyYkkg....",
+      "....gkyYykg.....",
+      "....gGkYkGg.....",
+      ".....gGkGg......",
+      "......gGg.......",
+      "......gGg.......",
+      ".....g.G.g......",
+      "....g..G..g.....",
+      ".......G........",
+      ".......G........",
+      "................",
+    ],
+  },
+  grain: {
+    rows: [
+      "...y.....y......",
+      "..yYy...yYy..y..",
+      "..yYy...yYy.yYy.",
+      "..yYy.y.yYy.yYy.",
+      "...Y.yYy.Y..yYy.",
+      "...g.yYy.g...Y..",
+      "...g.yYy.g...g..",
+      "...g..Y..g...g..",
+      "...g..g..g..g...",
+      "....g.g.g...g...",
+      "....g.g.g..g....",
+      ".....ggg..g.....",
+      ".....gGgg.......",
+      "......G.........",
+      "......G.........",
+      "................",
+    ],
+  },
+  beet: {
+    rows: [
+      "....g......g....",
+      "...glg....glg...",
+      "...gMg....gMg...",
+      "....gMg..gMg....",
+      ".....gMggMg.....",
+      "......kMMk......",
+      ".....kmmmmk.....",
+      "....kmsmmmMk....",
+      "....kmmmmmMk....",
+      "....kmmmmmMk....",
+      ".....kmmmMk.....",
+      "......kmMk......",
+      ".......kk.......",
+      ".......k........",
+      "................",
+      "................",
+    ],
+    palette: { m: "#a3243f", M: "#6e1830", s: "#d8607a" },
+  },
+  sprout: {
+    rows: [
+      "................",
+      "................",
+      "................",
+      "................",
+      "....kk....kk....",
+      "...klgk..kglk...",
+      "...kllgkkgllk...",
+      "....kkgGGgkk....",
+      "......kGGk......",
+      ".......Gk.......",
+      ".......Gk.......",
+      ".......Gk.......",
+      "....bbbBBbbb....",
+      "...bBbbbbbbBb...",
+      "................",
+      "................",
+    ],
+  },
+  drop: {
+    rows: [
+      "................",
+      ".......k........",
+      "......kck.......",
+      "......kck.......",
+      ".....kcwck......",
+      ".....kwccck.....",
+      "....kcwcccCk....",
+      "....kccccCCk....",
+      "....kcccCCCk....",
+      ".....kcCCCk.....",
+      "......kkkk......",
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+    ],
+  },
+  basket: {
+    rows: [
+      "................",
+      "................",
+      ".....kkkkkk.....",
+      "....kbk..kbk....",
+      "....kbk..kbk....",
+      "..kkkrokorkkkk..",
+      ".kbbbbbbbbbbbbk.",
+      ".kbBbBbBbBbBbBk.",
+      "..kbbbbbbbbbbk..",
+      "..kBbBbBbBbBbk..",
+      "...kbbbbbbbbk...",
+      "....kkkkkkkk....",
+      "................",
+      "................",
+      "................",
+      "................",
+    ],
+  },
+};
+
+const BY_CROP: Record<string, string> = {
+  carrots: "carrot",
+  parsley: "leafy",
+  dill: "leafy",
+  "sweet potato": "sweetpotato",
+  potato: "potato",
+  cabbage: "cabbage",
+  kale: "leafy",
+  collards: "leafy",
+  broccoli: "broccoli",
+  lettuce: "leafy",
+  spinach: "leafy",
+  chard: "leafy",
+  beet: "beet",
+  trees: "tree",
+  garlic: "garlic",
+  onion: "onion",
+  leeks: "onion",
+  beans: "pod",
+  peas: "pod",
+  clover: "clover",
+  tomatoes: "tomato",
+  eggplant: "tomato",
+  pepper: "pepper",
+  corn: "corn",
+  "winter rye": "grain",
+};
+
+const BY_FAMILY: Record<string, string> = {
+  brassica: "cabbage",
+  legume: "pod",
+  umbellifer: "carrot",
+  amaranth: "leafy",
+  nightshade: "tomato",
+  allium: "garlic",
+  grass: "grain",
+  woody: "tree",
+  "morning glory": "sweetpotato",
+};
+
+export function spriteKey(crop: string | null | undefined): string {
+  if (!crop) return "sprout";
+  const key = canonicalCrop(crop);
+  return BY_CROP[key] ?? BY_FAMILY[familyOf(key)?.family ?? ""] ?? "sprout";
+}
+
+const cache = new Map<string, string>();
+
+/** An SVG data URL for a built-in sprite: crisp at any size. */
+export function spriteDataUrl(key: string): string {
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const sprite = SPRITES[key] ?? SPRITES.sprout;
+  const palette = { ...BASE, ...sprite.palette };
+  let rects = "";
+  sprite.rows.forEach((row, y) => {
+    let x = 0;
+    while (x < row.length) {
+      const ch = row[x];
+      let run = 1;
+      while (x + run < row.length && row[x + run] === ch) run++;
+      const fill = palette[ch];
+      if (fill) rects += `<rect x="${x}" y="${y}" width="${run}" height="1" fill="${fill}"/>`;
+      x += run;
+    }
+  });
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">${rects}</svg>`;
+  const url = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  cache.set(key, url);
+  return url;
+}
+
+/** Custom drawings (from public/sprites) win over the built-in sprites. */
+export function spriteUrl(crop: string | null | undefined, custom: Record<string, string> = {}): string {
+  const key = spriteKey(crop);
+  const name = crop ? canonicalCrop(crop) : "";
+  return custom[name] ?? custom[key] ?? spriteDataUrl(key);
+}
+
+export function spriteFileKey(fileName: string): string {
+  return fileName
+    .replace(/\.[a-z0-9]+$/i, "")
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .trim();
+}
+
+function tile(size: number, base: string, specks: Array<[number, number, string]>): string {
+  const rects = specks.map(([x, y, fill]) => `<rect x="${x}" y="${y}" width="1" height="1" fill="${fill}"/>`).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="${base}"/>${rects}</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
+/** Repeating ground textures for the map, as CSS url() values. */
+export const TILES = {
+  grass: tile(8, "#9cc463", [
+    [1, 1, "#86b04f"], [2, 1, "#86b04f"], [5, 2, "#b2d47a"], [6, 5, "#86b04f"], [7, 5, "#86b04f"],
+    [3, 4, "#b2d47a"], [0, 6, "#86b04f"], [4, 7, "#b2d47a"], [2, 6, "#86b04f"],
+  ]),
+  soil: tile(8, "#7a5232", [
+    [1, 1, "#68442a"], [4, 0, "#8d6240"], [6, 2, "#68442a"], [2, 4, "#8d6240"], [5, 5, "#68442a"],
+    [0, 6, "#8d6240"], [7, 7, "#68442a"], [3, 7, "#68442a"], [6, 6, "#8d6240"],
+  ]),
+};

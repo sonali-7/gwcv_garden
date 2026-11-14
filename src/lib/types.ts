@@ -31,6 +31,17 @@ export type Bed = {
   geometry: { x: number; y: number; w: number; h: number } | null;
 };
 
+export type GardenLayout = {
+  widthFt: number;
+  lengthFt: number;
+  imageUrl: string | null;
+  location: string;
+};
+
+export function defaultLayout(): GardenLayout {
+  return { widthFt: 40, lengthFt: 30, imageUrl: null, location: "" };
+}
+
 export type Planting = {
   id: string;
   bed_id: string;
@@ -132,6 +143,7 @@ export type DatabaseShape = {
   conversations: Record<string, Conversation>;
   demoPhones: string[];
   seenEvents: string[];
+  layout?: GardenLayout;
 };
 
 export type DashboardData = {
@@ -181,5 +193,6 @@ export function emptyDatabase(): DatabaseShape {
     conversations: {},
     demoPhones: [],
     seenEvents: [],
+    layout: defaultLayout(),
   };
 }

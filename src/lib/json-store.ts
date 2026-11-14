@@ -8,6 +8,10 @@ import type { DatabaseShape } from "./types";
 const WRITES = new Set<keyof Store>([
   "replaceAll",
   "insertPerson",
+  "insertBed",
+  "updateBed",
+  "deleteBed",
+  "saveLayout",
   "insertPlanting",
   "updatePlanting",
   "deletePlanting",
