@@ -20,16 +20,26 @@ export async function POST(request: Request) {
       timestamp: request.headers.get("webhook-timestamp") ?? "",
       signature: request.headers.get("webhook-signature") ?? "",
     }, secret);
-  } catch {
+  } catch (error) {
+    // Photon does not retry most 4xx — a bad secret here permanently drops that delivery.
+    console.warn(
+      "Photon webhook rejected:",
+      error instanceof Error ? error.message : "invalid",
+      "(check PHOTON_WEBHOOK_SECRET matches this destination; Photon will not retry 400s)",
+    );
     return json({ error: "Invalid webhook." }, 400);
   }
 
   const inbound = readPhotonInbound(event);
-  if (!inbound || !("phone" in inbound) || !inbound.text) return json({ ok: true });
+  if (!inbound || !("phone" in inbound) || !inbound.text) {
+    console.warn("Photon webhook ignored: not a processable message.received (or empty text).");
+    return json({ ok: true });
+  }
 
   const store = await getStore();
   if (await store.hasSeenEvent(inbound.eventId)) return json({ ok: true });
 
+  console.info("Photon message received, text length", inbound.text.length);
   const result = await handleIncoming(store, { phone: inbound.phone, text: inbound.text });
   await store.markEvent(inbound.eventId);
 

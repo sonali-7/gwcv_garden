@@ -4,11 +4,15 @@ import { canonicalCrop, knownCrops } from "./crops";
 export type ParsedMessage =
   | { kind: "emergency" }
   | { kind: "undo" }
+  | { kind: "cancel"; instruction: string }
   | { kind: "query_schedule" }
   | { kind: "query_watering" }
   | { kind: "edit"; instruction: string }
   | { kind: "session"; draft: SessionDraft }
   | { kind: "unknown" };
+
+/** Standing / weekly plans are placed this many weeks out (hackathon-thin recurrence). */
+export const STANDING_WEEKS = 8;
 
 const ACTIVITIES: Array<[RegExp, ActivityType]> = [
   [/\b(weeded|weeding|weed)\b/i, "weed"],
@@ -44,16 +48,50 @@ export function timeGaps(draft: SessionDraft): Array<"start" | "ampm" | "end"> {
 }
 
 export function needsDay(draft: SessionDraft): boolean {
-  return draft.activity === "meeting" && draft.onDate == null && draft.dayOffset == null && draft.weekday == null;
+  const hasDay =
+    draft.onDate != null ||
+    draft.dayOffset != null ||
+    draft.weekday != null ||
+    (draft.weekdays?.length ?? 0) > 0;
+  return draft.activity === "meeting" && !hasDay;
+}
+
+/** True when a 12-hour start/end would cross noon/midnight if given the same am/pm. */
+export function rangeCrossesMeridian(
+  start: { h: number; m: number },
+  end: { h: number; m: number },
+): boolean {
+  return start.h > end.h || (start.h === end.h && start.m >= end.m);
+}
+
+export function isFutureWording(draft: SessionDraft): boolean {
+  const text = draft.sourceText.toLowerCase();
+  if (/\b(schedule|scheduled|scheduling|plan(?:ning)?|will|gonna|going to)\b/.test(text)) return true;
+  if (draft.activity === "meeting") return true;
+  if (draft.nextWeek || draft.weekday != null || (draft.weekdays?.length ?? 0) > 0) return true;
+  if (draft.dayOffset != null && draft.dayOffset > 0) return true;
+  if (draft.recurringWeeks > 1) return true;
+  if (/\b(weeded|watered|harvested|planted|mulched|tilled|prepped|checked|walked|turned)\b/.test(text)) {
+    return false;
+  }
+  return false;
 }
 
 export function questionFor(draft: SessionDraft, field: "start" | "ampm" | "end" | "day"): string {
   if (field === "day") return "Which day?";
-  if (field === "start") return "What time did you start?";
-  if (field === "end") return "Until when?";
+  if (field === "start") {
+    return isFutureWording(draft) ? "What time should I put?" : "What time did you start?";
+  }
+  if (field === "end") return isFutureWording(draft) ? "Until when?" : "Until when did you go?";
   const start = draft.start;
   const end = draft.end;
-  if (start && end) return `Was that ${clockLabel(start)}–${clockLabel(end)}am or ${clockLabel(start)}–${clockLabel(end)}pm?`;
+  if (start && end && rangeCrossesMeridian(start, end)) {
+    // "pm" for a 10–2 span almost always means 10am–2pm in the garden, not 10pm–2am.
+    return `Was that ${clockLabel(start)}am–${clockLabel(end)}pm, or ${clockLabel(start)}pm–${clockLabel(end)}am?`;
+  }
+  if (start && end) {
+    return `Was that ${clockLabel(start)}–${clockLabel(end)}am or ${clockLabel(start)}–${clockLabel(end)}pm?`;
+  }
   if (start) return `Was that ${clockLabel(start)}am or ${clockLabel(start)}pm?`;
   return "Was that morning or evening?";
 }
@@ -68,6 +106,12 @@ export function parseMessage(text: string): ParsedMessage {
   if (!trimmed) return { kind: "unknown" };
   if (isEmergency(trimmed)) return { kind: "emergency" };
   if (/^\s*undo\b/i.test(trimmed)) return { kind: "undo" };
+  if (/^\s*(cancel|delete|remove)\b/i.test(trimmed)) {
+    return {
+      kind: "cancel",
+      instruction: trimmed.replace(/^\s*(cancel|delete|remove)\b[:\s-]*/i, "").trim(),
+    };
+  }
   if (isScheduleQuery(trimmed)) return { kind: "query_schedule" };
   if (isWaterQuery(trimmed)) return { kind: "query_watering" };
   if (/^\s*edit\b/i.test(trimmed)) {
@@ -90,20 +134,29 @@ export function parseDraft(text: string): SessionDraft | null {
   let end = range?.end ?? null;
   let startAmpm = range?.startAmpm ?? single?.ampm ?? null;
   let endAmpm = range?.endAmpm ?? null;
-  if (start && end && startAmpm && !endAmpm) endAmpm = startAmpm;
-  if (start && end && endAmpm && !startAmpm) startAmpm = endAmpm;
+  // Same-meridian only when the span does not cross noon/midnight (10–2 needs a smarter guess).
+  if (start && end && !rangeCrossesMeridian(start, end)) {
+    if (startAmpm && !endAmpm) endAmpm = startAmpm;
+    if (endAmpm && !startAmpm) startAmpm = endAmpm;
+  }
   const dayWord = findDaypart(lower);
   if (dayWord && !startAmpm) startAmpm = dayWord;
-  if (dayWord && end && !endAmpm) endAmpm = dayWord;
+  if (dayWord && end && !endAmpm && !(start && rangeCrossesMeridian(start, end))) endAmpm = dayWord;
 
-  const dayOffset = /\byesterday\b/.test(lower) ? -1 : /\btoday\b/.test(lower) ? 0 : null;
-  const nextWeek = /\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/.test(lower);
-  let weekday: number | null = null;
-  for (let i = 0; i < WEEKDAY_WORDS.length; i += 1) {
-    if (lower.includes(WEEKDAY_WORDS[i])) weekday = i;
-  }
+  const dayOffset = /\byesterday\b/.test(lower) ? -1 : /\btoday\b/.test(lower) ? 0 : /\btomorrow\b/.test(lower) ? 1 : null;
+  const { weekdays, nextWeek } = findWeekdays(lower);
+  const weekday = weekdays[0] ?? null;
+  const recurringWeeks = isStanding(lower) ? STANDING_WEEKS : 1;
 
-  if (!activity && !start && !end && durationMin == null && weekday == null && dayOffset == null) {
+  if (
+    !activity &&
+    !start &&
+    !end &&
+    durationMin == null &&
+    weekday == null &&
+    dayOffset == null &&
+    !findExplicitDate(lower)
+  ) {
     return null;
   }
 
@@ -112,7 +165,9 @@ export function parseDraft(text: string): SessionDraft | null {
     crop: findCrop(lower),
     dayOffset,
     weekday,
+    weekdays,
     nextWeek,
+    recurringWeeks,
     start,
     end,
     startAmpm,
@@ -125,10 +180,18 @@ export function parseDraft(text: string): SessionDraft | null {
 }
 
 export function finishDraft(draft: SessionDraft): SessionDraft {
-  if (draft.activity === "meeting" && draft.start && !draft.end && draft.durationMin == null) {
-    return { ...draft, durationMin: 60 };
+  const weekdays = draft.weekdays ?? [];
+  const recurringWeeks = draft.recurringWeeks ?? 1;
+  const normalized: SessionDraft = {
+    ...draft,
+    weekdays,
+    recurringWeeks,
+    weekday: draft.weekday ?? weekdays[0] ?? null,
+  };
+  if (normalized.activity === "meeting" && normalized.start && !normalized.end && normalized.durationMin == null) {
+    return { ...normalized, durationMin: 60 };
   }
-  return draft;
+  return normalized;
 }
 
 export function textHasDay(text: string): boolean {
@@ -147,16 +210,26 @@ export function applyClarification(
   if (field === "day" || (field === "end" && draft.activity === "meeting")) {
     const onDate = calendarDate(text, today, field === "day");
     if (onDate) {
-      return finishDraft({ ...draft, onDate, dayOffset: null, weekday: null, nextWeek: false });
+      return finishDraft({
+        ...draft,
+        onDate,
+        dayOffset: null,
+        weekday: null,
+        weekdays: [],
+        nextWeek: false,
+      });
     }
     const named = parseDraft(text);
-    if (named?.weekday != null && !named.start) {
+    if ((named?.weekday != null || named?.weekdays.length) && !named.start) {
+      const weekdays = named.weekdays.length ? named.weekdays : named.weekday != null ? [named.weekday] : [];
       return finishDraft({
         ...draft,
         onDate: null,
         dayOffset: null,
-        weekday: named.weekday,
+        weekday: weekdays[0] ?? null,
+        weekdays,
         nextWeek: true,
+        recurringWeeks: Math.max(draft.recurringWeeks, named.recurringWeeks),
       });
     }
     if (field === "day") return null;
@@ -164,51 +237,62 @@ export function applyClarification(
   if (field === "ampm") {
     const word = ampmWord(text);
     if (word) {
-      return {
-        ...draft,
-        startAmpm: word,
-        endAmpm: draft.end ? word : draft.endAmpm,
-      };
+      return finishDraft(applyAmpmWord(draft, word));
     }
   }
   const attempt = parseDraft(text);
   if (!attempt) {
     const bare = text.trim().match(
-      /^(\d{1,2})(?::([0-5]\d))?\s*(?:(?:in the|this)\s+)?(a\.?m\.?|p\.?m\.?|morning|afternoon|evening|tonight)?$/i,
+      /^(\d{1,2})(?::([0-5]\d))?\s*(?:(?:in the|this)\s+)?(a\.?m\.?|p\.?m\.?|morning|afternoon|evening|tonight)?(?:\s*,?\s*(\d+)\s*(minutes?|mins?|hours?|hrs?))?$/i,
     );
     if (!bare || field === "ampm") return null;
     const clock = { h: Number(bare[1]), m: Number(bare[2] ?? 0) };
     if (clock.h < 1 || clock.h > 12) return null;
     const flag = bare[3] ? ampmWord(bare[3]) : null;
-    if (field === "end") return { ...draft, end: clock, endAmpm: flag ?? draft.endAmpm };
-    return {
+    const durationMin = bare[4]
+      ? bare[5].startsWith("h")
+        ? Math.round(Number(bare[4]) * 60)
+        : Number(bare[4])
+      : null;
+    if (field === "end") return finishDraft({ ...draft, end: clock, endAmpm: flag ?? draft.endAmpm });
+    return finishDraft({
       ...draft,
       start: clock,
       startAmpm: flag ?? draft.startAmpm,
       endAmpm: draft.end ? (flag ?? draft.endAmpm) : draft.endAmpm,
-    };
+      durationMin: durationMin ?? draft.durationMin,
+      end: durationMin ? null : draft.end,
+    });
   }
   if (field === "ampm") {
     if (!attempt.startAmpm && !attempt.endAmpm) return null;
     const flag = attempt.startAmpm ?? attempt.endAmpm;
-    return {
+    if (!flag) return null;
+    const withTimes = {
       ...draft,
       start: attempt.start ?? draft.start,
       end: attempt.end ?? draft.end,
-      startAmpm: flag,
-      endAmpm: draft.end || attempt.end ? (attempt.endAmpm ?? flag) : draft.endAmpm,
     };
+    // Explicit 10am–2pm in the reply wins; bare "pm" uses the crossing heuristic.
+    if (attempt.startAmpm && attempt.endAmpm && attempt.startAmpm !== attempt.endAmpm) {
+      return finishDraft({ ...withTimes, startAmpm: attempt.startAmpm, endAmpm: attempt.endAmpm });
+    }
+    return finishDraft(applyAmpmWord(withTimes, flag));
   }
   if (field === "start") {
-    if (!attempt.start) return null;
-    return {
+    if (!attempt.start && attempt.durationMin == null) return null;
+    return finishDraft({
       ...draft,
-      start: attempt.start,
+      start: attempt.start ?? draft.start,
       startAmpm: attempt.startAmpm ?? draft.startAmpm,
-      end: attempt.end ?? draft.end,
+      end: attempt.end ?? (attempt.durationMin ? null : draft.end),
       endAmpm: attempt.end ? (attempt.endAmpm ?? draft.endAmpm) : draft.endAmpm,
       durationMin: attempt.durationMin ?? draft.durationMin,
-    };
+      weekday: attempt.weekday ?? draft.weekday,
+      weekdays: attempt.weekdays.length ? attempt.weekdays : draft.weekdays,
+      nextWeek: attempt.nextWeek || draft.nextWeek,
+      recurringWeeks: Math.max(attempt.recurringWeeks, draft.recurringWeeks),
+    });
   }
   const end = attempt.end ?? attempt.start;
   if (!end) return null;
@@ -227,6 +311,24 @@ export function ampmWord(text: string): "am" | "pm" | null {
     return "pm";
   }
   return null;
+}
+
+/**
+ * Apply a single am/pm answer. For spans like 10–2, "pm" means daytime (10am–2pm)
+ * and "am" means overnight (10pm–2am) — garden work is almost always the former.
+ */
+export function applyAmpmWord(draft: SessionDraft, word: "am" | "pm"): SessionDraft {
+  const start = draft.start;
+  const end = draft.end;
+  if (start && end && rangeCrossesMeridian(start, end)) {
+    if (word === "pm") return { ...draft, startAmpm: "am", endAmpm: "pm" };
+    return { ...draft, startAmpm: "pm", endAmpm: "am" };
+  }
+  return {
+    ...draft,
+    startAmpm: word,
+    endAmpm: end ? word : draft.endAmpm,
+  };
 }
 
 export function cleanName(text: string): string | null {
@@ -314,12 +416,30 @@ function findSingle(lower: string): { start: { h: number; m: number }; ampm: "am
 }
 
 function findDuration(lower: string): number | null {
-  const match = lower.match(/\bfor\s+(an|a|one|\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?)\b/);
+  const match = lower.match(
+    /\b(?:for\s+)?(an|a|one|\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?)\b/,
+  );
   if (!match) return null;
   const qty = match[1] === "an" || match[1] === "a" || match[1] === "one" ? 1 : Number(match[1]);
   if (!Number.isFinite(qty) || qty <= 0) return null;
   if (match[2].startsWith("h")) return Math.round(qty * 60);
   return Math.round(qty);
+}
+
+function findWeekdays(lower: string): { weekdays: number[]; nextWeek: boolean } {
+  const weekdays: number[] = [];
+  let nextWeek = false;
+  const pattern = new RegExp(`\\b(next\\s+)?(${WEEKDAY_WORDS.join("|")})\\b`, "g");
+  for (const match of lower.matchAll(pattern)) {
+    if (match[1]) nextWeek = true;
+    const index = WEEKDAY_WORDS.indexOf(match[2]);
+    if (index >= 0 && !weekdays.includes(index)) weekdays.push(index);
+  }
+  return { weekdays, nextWeek };
+}
+
+function isStanding(lower: string): boolean {
+  return /\b(weekly|standing|recurring|every\s+week|each\s+week)\b/.test(lower);
 }
 
 function findDaypart(lower: string): "am" | "pm" | null {
