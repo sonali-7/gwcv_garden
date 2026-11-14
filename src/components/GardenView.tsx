@@ -161,8 +161,9 @@ export function GardenView({ initial }: { initial: GardenData }) {
         </div>
       </header>
       {error ? <p className="banner">{error}</p> : null}
-      <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
       <div className="garden-workspace">
+        <div className="garden-main">
+        <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
         <GardenMap
           layout={data.layout}
           beds={data.beds}
@@ -190,6 +191,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
             })
           }
         />
+        </div>
         <PlantList
           data={shown}
           mode={mode}

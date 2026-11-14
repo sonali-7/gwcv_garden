@@ -1,3 +1,4 @@
+import { firstOverlap } from "@/lib/bed-space";
 import { getStore } from "@/lib/db";
 import { cleanGeometry, cleanName } from "@/lib/garden-api";
 import { json, noContent } from "@/lib/http";
@@ -24,6 +25,12 @@ export async function PATCH(request: Request, { params }: Ctx) {
     name: "name" in body ? cleanName(body.name, bed.name) : bed.name,
     geometry: "geometry" in body ? cleanGeometry(body.geometry, layout.widthFt, layout.lengthFt) ?? bed.geometry : bed.geometry,
   };
+  // Patches can't share ground. Only checked when the bed moves, so older overlapping beds can still be renamed.
+  if (next.geometry && JSON.stringify(next.geometry) !== JSON.stringify(bed.geometry)) {
+    const others = beds.filter((item) => item.id !== id && !item.archived);
+    const hit = firstOverlap(next.geometry, others);
+    if (hit) return json({ error: `That would overlap ${hit.name}. Move it to open ground.` }, 409);
+  }
   await store.updateBed(next);
   return json(next);
 }

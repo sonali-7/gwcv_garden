@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { allowedMove, allowedResize } from "@/lib/bed-space";
 import { spriteDataUrl, spriteUrl, TILES } from "@/lib/pixel-sprites";
 import { fromFt, gridStepFt, showSize, toFt, type Units } from "@/lib/units";
 import { inGroundOn, plannedAfter } from "@/lib/plantings";
@@ -155,7 +156,12 @@ export function GardenMap(props: {
         h: Math.min(Math.max(snap(o.h + dy), 1), layout.lengthFt - o.y),
       };
     }
-    setDrag({ ...drag, current: next });
+    // Patches can't share ground: stop at neighbors (sliding along the free direction).
+    const others = placed(props.beds, layout)
+      .filter((bed) => bed.id !== drag.id)
+      .map((bed) => bed.geometry);
+    const allowed = drag.mode === "move" ? allowedMove(next, drag.current, others) : allowedResize(next, drag.current, others);
+    setDrag({ ...drag, current: allowed });
   }
 
   function endDrag() {
@@ -186,19 +192,22 @@ export function GardenMap(props: {
   const step = gridStepFt(units);
   const gridX = (step / layout.widthFt) * 100;
   const gridY = (step / layout.lengthFt) * 100;
-  const lawn: CSSProperties = {
-    backgroundImage: `linear-gradient(to right, rgba(43, 29, 20, 0.12) 2px, transparent 2px), linear-gradient(to bottom, rgba(43, 29, 20, 0.12) 2px, transparent 2px), ${TILES.grass}`,
+  // The whole garden is one bed of soil, with a faint grid; grass only outside an odd-shaped garden's edge.
+  const ground: CSSProperties = {
+    backgroundImage: `linear-gradient(to right, rgba(255, 236, 200, 0.07) 1px, transparent 1px), linear-gradient(to bottom, rgba(255, 236, 200, 0.07) 1px, transparent 1px), ${TILES.soil}`,
     backgroundSize: `${gridX}% ${gridY}%, ${gridX}% ${gridY}%, 24px 24px`,
   };
   const shape = layout.outline && layout.outline.length >= 3 ? layout.outline : null;
   const shapePct = shape?.map(([x, y]) => [(x / layout.widthFt) * 100, (y / layout.lengthFt) * 100]) ?? null;
   const surfaceStyle: CSSProperties = shapePct
-    ? { aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`, backgroundImage: TILES.path, backgroundSize: "24px 24px" }
-    : { aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`, ...lawn };
+    ? { aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`, backgroundImage: TILES.grass, backgroundSize: "24px 24px" }
+    : { aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`, ...ground };
 
   return (
     <section className="map-card" aria-label="Garden map">
       <div className="map-head">
+        <div className="map-heading">
+        <h2 className="map-title">Garden</h2>
         <div className="map-legend" aria-label="Legend">
           {[...legend.entries()].map(([crop, url]) => (
             <span key={crop}>
@@ -215,6 +224,7 @@ export function GardenMap(props: {
             <i className="swatch-planned" />
             planned
           </span>
+        </div>
         </div>
         <div className="map-tools">
           <div className="zoom" role="group" aria-label="Zoom">
@@ -295,7 +305,7 @@ export function GardenMap(props: {
             <div
               className="lawn"
               aria-hidden="true"
-              style={{ ...lawn, clipPath: `polygon(${shapePct.map(([x, y]) => `${x}% ${y}%`).join(", ")})` }}
+              style={{ ...ground, clipPath: `polygon(${shapePct.map(([x, y]) => `${x}% ${y}%`).join(", ")})` }}
             />
             <svg className="lawn-edge" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
               <polygon points={shapePct.map(([x, y]) => `${x},${y}`).join(" ")} />
@@ -351,7 +361,6 @@ export function GardenMap(props: {
                   top: `${(g.y / layout.lengthFt) * 100}%`,
                   width: `${(g.w / layout.widthFt) * 100}%`,
                   height: `${(g.h / layout.lengthFt) * 100}%`,
-                  backgroundImage: TILES.soil,
                 } as CSSProperties
               }
               onClick={(event) => {
