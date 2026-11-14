@@ -105,8 +105,13 @@ export type SessionDraft = {
   activity: ActivityType | null;
   crop: string | null;
   dayOffset: number | null;
+  /** First / primary weekday (0=Sun). Prefer `weekdays` when several are named. */
   weekday: number | null;
+  /** Every weekday named in the text, e.g. Tuesday and Thursday. */
+  weekdays: number[];
   nextWeek: boolean;
+  /** How many weeks to place (1 = once; 8 = standing weekly for a couple months). */
+  recurringWeeks: number;
   start: { h: number; m: number } | null;
   end: { h: number; m: number } | null;
   startAmpm: "am" | "pm" | null;

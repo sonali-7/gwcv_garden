@@ -2,13 +2,21 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { placeSlices, sessionStatus, slicesForSession } from "./calendar";
 import { loadDashboard } from "./dashboard-data";
-import { handleIncoming } from "./handle-message";
+import { expandOccurrences, handleIncoming, resolveInterval } from "./handle-message";
 import { createMemoryStore } from "./memory-store";
 import { mergeDrafts, messageFromTool } from "./agent";
-import { calendarDate, needsDay, parseMessage, timeGaps } from "./parse";
+import {
+  applyClarification,
+  calendarDate,
+  needsDay,
+  parseDraft,
+  parseMessage,
+  questionFor,
+  timeGaps,
+} from "./parse";
 import { buildTasks } from "./priority";
 import { buildSeed } from "./seed";
-import { DEFAULT_TZ, startOfWeekYmd, zonedToUtc } from "./time";
+import { DEFAULT_TZ, partsInZone, startOfWeekYmd, zonedToUtc } from "./time";
 import { LIMIT_NOTICE, photonReply } from "./photon";
 import { readPhotonInbound, verifyStandardWebhook } from "./webhook";
 import { createHmac } from "node:crypto";
@@ -70,11 +78,42 @@ describe("parser", () => {
     assert.equal(parsed.draft.activity, "meeting");
     assert.equal(parsed.draft.startAmpm, "am");
     assert.equal(parsed.draft.durationMin, 60);
+    assert.equal(parsed.draft.recurringWeeks, 8);
     assert.deepEqual(timeGaps(parsed.draft), []);
     assert.equal(needsDay(parsed.draft), true);
     assert.equal(calendarDate("the 19th of november", "2026-11-14"), "2026-11-19");
     assert.equal(calendarDate("11/19", "2026-11-14"), "2026-11-19");
     assert.equal(calendarDate("November 19", "2026-11-14"), "2026-11-19");
+  });
+
+  it("reads crossed ranges, durations, and compound weekdays", () => {
+    const weed = parseMessage("weeded carrot row from 10-2");
+    assert.equal(weed.kind, "session");
+    if (weed.kind !== "session") return;
+    assert.deepEqual(weed.draft.start, { h: 10, m: 0 });
+    assert.deepEqual(weed.draft.end, { h: 2, m: 0 });
+    assert.equal(weed.draft.startAmpm, null);
+    assert.equal(questionFor(weed.draft, "ampm"), "Was that 10am–2pm, or 10pm–2am?");
+    const clarified = applyClarification(weed.draft, "ampm", "pm");
+    assert.equal(clarified?.startAmpm, "am");
+    assert.equal(clarified?.endAmpm, "pm");
+
+    const timed = parseMessage("2 pm, 30 minutes");
+    assert.ok(timed.kind === "session" || timed.kind === "unknown");
+    const durationOnly = parseDraft("2 pm, 30 minutes");
+    assert.ok(durationOnly);
+    assert.deepEqual(durationOnly.start, { h: 2, m: 0 });
+    assert.equal(durationOnly.startAmpm, "pm");
+    assert.equal(durationOnly.durationMin, 30);
+
+    const compound = parseMessage("Schedule weekly meeting next tuesday and next thursday");
+    assert.equal(compound.kind, "session");
+    if (compound.kind !== "session") return;
+    assert.equal(compound.draft.activity, "meeting");
+    assert.deepEqual(compound.draft.weekdays, [2, 4]);
+    assert.equal(compound.draft.nextWeek, true);
+    assert.equal(compound.draft.recurringWeeks, 8);
+    assert.equal(parseMessage("cancel thursday meeting").kind, "cancel");
   });
 
   it("keeps written times and drops a day the model made up", () => {
@@ -265,6 +304,65 @@ describe("text log", () => {
     assert.equal(logged.person?.phone, phone);
   });
 
+  it("schedules both weekdays and honors a 30-minute duration", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const first = await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "Schedule weekly meeting next tuesday and next thursday",
+      now: NOW,
+    });
+    assert.match(first.replies[0], /time/i);
+    const placed = await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "2 pm, 30 minutes",
+      now: NOW,
+    });
+    assert.match(placed.replies[0], /Scheduled/);
+    assert.match(placed.replies[0], /2pm–2:30pm/);
+    const sessions = (await store.listSessions()).filter(
+      (session) => session.person_id === "person-jeremy" && session.activity_type === "meeting" && new Date(session.start) > NOW,
+    );
+    assert.ok(sessions.length >= 2);
+    const weekdays = new Set(
+      sessions.map((session) => new Date(session.start).toLocaleString("en-US", { weekday: "short", timeZone: DEFAULT_TZ })),
+    );
+    assert.ok(weekdays.has("Tue"));
+    assert.ok(weekdays.has("Thu"));
+    assert.ok(sessions.every((session) => {
+      const start = partsInZone(new Date(session.start), DEFAULT_TZ);
+      const end = partsInZone(new Date(session.end), DEFAULT_TZ);
+      return start.hour === 14 && start.minute === 0 && end.hour === 14 && end.minute === 30;
+    }));
+    assert.match(placed.replies[0], /Tue & Thu/);
+
+    const canceled = await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "cancel thursday meeting",
+      now: NOW,
+    });
+    assert.match(canceled.replies[0], /Canceled/i);
+    const left = (await store.listSessions()).filter(
+      (session) => session.person_id === "person-jeremy" && session.activity_type === "meeting" && new Date(session.start) > NOW,
+    );
+    assert.ok(left.every((session) => partsInZone(new Date(session.start), DEFAULT_TZ).weekday === 2));
+  });
+
+  it("turns 10-2 + pm into 10am–2pm", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "weeded carrot row from 10-2",
+      now: NOW,
+    });
+    const logged = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "pm",
+      now: NOW,
+    });
+    assert.match(logged.replies[0], /10am–2pm/);
+    assert.ok(!/10pm/.test(logged.replies[0]));
+  });
+
   it("creates a planting when someone plants into an empty row", async () => {
     const store = createMemoryStore(buildSeed(NOW));
     await handleIncoming(store, { phone: "+15555501002", text: "from 8-9am I planted kale", now: NOW });
@@ -349,7 +447,14 @@ describe("text log", () => {
     assert.equal(placed.session?.activity_type, "meeting");
     assert.equal(placed.session?.start, "2026-11-19T15:00:00.000Z");
     assert.equal(placed.session?.end, "2026-11-19T16:00:00.000Z");
-    assert.deepEqual(placed.replies, ["Scheduled: Jeremy, Thu 11/19, 10am–11am, weekly meeting."]);
+    assert.match(placed.replies[0], /Scheduled: Jeremy, .*10am–11am.*weekly meeting \(8 weeks\)\./);
+    const standing = (await store.listSessions()).filter(
+      (session) =>
+        session.person_id === "person-jeremy" &&
+        session.activity_type === "meeting" &&
+        new Date(session.start) >= new Date("2026-11-19T15:00:00.000Z"),
+    );
+    assert.equal(standing.length, 8);
   });
 
   it("does not log an emergency", async () => {

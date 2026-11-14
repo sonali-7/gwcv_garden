@@ -141,6 +141,7 @@ export async function handleIncoming(
     const draftAttempt = parseDraft(text);
     const startOver =
       parsed.kind === "undo" ||
+      parsed.kind === "cancel" ||
       parsed.kind === "query_schedule" ||
       parsed.kind === "query_watering" ||
       parsed.kind === "edit" ||
@@ -179,6 +180,7 @@ async function processText(
     crops: activePlantings(plantings, day).map((planting) => planting.crop),
   });
   if (parsed.kind === "undo") return undo(store, person, now, say);
+  if (parsed.kind === "cancel") return cancelPlans(store, person, parsed.instruction, now, say);
   if (parsed.kind === "query_schedule") {
     await say(await scheduleText(store, now, person.timezone));
     if (image) await persistPhoto(store, person.id, image, null, now);
@@ -288,14 +290,15 @@ async function continueDraft(
     return null;
   }
 
-  const interval = resolveInterval(ready, now, person.timezone);
-  if (!interval) {
-    await say("What time did you start?");
+  const occurrences = expandOccurrences(ready, now, person.timezone);
+  const first = resolveInterval(occurrences[0] ?? ready, now, person.timezone);
+  if (!first) {
+    await say(questionFor(ready, "start"));
     return null;
   }
   const beds = await store.listBeds();
   const plantings = await store.listPlantings();
-  const loc = matchLocation(locationText(ready), beds, plantings, interval.day);
+  const loc = matchLocation(locationText(ready), beds, plantings, first.day);
   const activity = ready.activity ?? "other";
   if (!loc.bed && needsRow(activity)) {
     await store.saveConversation(person.phone, {
@@ -305,7 +308,71 @@ async function continueDraft(
     await say(loc.ambiguous ? `Which row — ${loc.choices.join(" or ")}?` : "Which row?");
     return null;
   }
-  return commit(store, person, ready, loc.bed, loc.planting, image, now, say, false);
+
+  if (occurrences.length === 1) {
+    return commit(store, person, occurrences[0], loc.bed, loc.planting, image, now, say, false);
+  }
+
+  const created: WorkSession[] = [];
+  for (const [index, occurrence] of occurrences.entries()) {
+    const session = await commit(
+      store,
+      person,
+      occurrence,
+      loc.bed,
+      loc.planting,
+      index === 0 ? image : null,
+      now,
+      async () => undefined,
+      false,
+    );
+    if (session) created.push(session);
+  }
+  if (created.length === 0) {
+    await say("I couldn't schedule those.");
+    return null;
+  }
+  const planned = created.some((session) => new Date(session.start).getTime() > now.getTime());
+  const label = planned ? "Scheduled" : "Logged";
+  const phrase = planned
+    ? planPhrase(activity, ready.crop, loc.bed?.name ?? null)
+    : workPhrase(activity, ready.crop, loc.bed?.name ?? null);
+  await say(`${label}: ${person.name}, ${seriesWhen(created, now, person.timezone, ready.recurringWeeks)}, ${phrase}${ready.recurringWeeks > 1 ? ` (${ready.recurringWeeks} weeks)` : ""}.`);
+  return created[0] ?? null;
+}
+
+/** Compact confirmation for multi-day / standing series (keeps SMS short). */
+function seriesWhen(sessions: WorkSession[], now: Date, timeZone: string, weeks: number): string {
+  if (sessions.length === 1) {
+    return whenPhrase(new Date(sessions[0].start), new Date(sessions[0].end), now, timeZone);
+  }
+  const first = sessions[0];
+  const startParts = partsInZone(new Date(first.start), timeZone);
+  const endParts = partsInZone(new Date(first.end), timeZone);
+  const clock = `${formatClock(startParts.hour, startParts.minute)}–${formatClock(endParts.hour, endParts.minute)}`;
+  const dowOrder: number[] = [];
+  const firstByDow = new Map<number, WorkSession>();
+  for (const session of sessions) {
+    const dow = partsInZone(new Date(session.start), timeZone).weekday;
+    if (!firstByDow.has(dow)) {
+      firstByDow.set(dow, session);
+      dowOrder.push(dow);
+    }
+  }
+  const dowLabel = dowOrder.map((dow) => DAY[dow]).join(" & ");
+  if (weeks > 1) {
+    const startLabel = whenPhrase(new Date(first.start), new Date(first.end), now, timeZone).replace(
+      /,?\s*\d{1,2}(?::\d{2})?(?:am|pm)–.+$/,
+      "",
+    );
+    return `${dowLabel} ${clock} starting ${startLabel}`;
+  }
+  if (sessions.length <= 4) {
+    return sessions
+      .map((session) => whenPhrase(new Date(session.start), new Date(session.end), now, timeZone))
+      .join("; ");
+  }
+  return `${dowLabel} ${clock} (${sessions.length} times)`;
 }
 
 async function commit(
@@ -322,11 +389,12 @@ async function commit(
   const interval = resolveInterval(draft, now, person.timezone);
   const activity = draft.activity ?? "other";
   if (!interval) {
-    await say("What time did you start?");
+    await say(questionFor(draft, "start"));
     return null;
   }
   const crop = draft.crop ?? planting?.crop ?? null;
   let plantingId = planting?.id ?? null;
+  const planned = interval.start.getTime() > now.getTime();
   const session: WorkSession = {
     id: randomUUID(),
     person_id: person.id,
@@ -335,7 +403,10 @@ async function commit(
     activity_type: activity,
     bed_id: bed?.id ?? null,
     planting_id: plantingId,
-    notes: sentence(workPhrase(activity, crop, bed?.name ?? null)) + ".",
+    notes:
+      sentence(
+        planned ? planPhrase(activity, crop, bed?.name ?? null) : workPhrase(activity, crop, bed?.name ?? null),
+      ) + ".",
     raw_message: draft.sourceText,
   };
 
@@ -344,7 +415,7 @@ async function commit(
     const existing = plantings.find(
       (item) => item.bed_id === bed.id && item.crop.toLowerCase() === crop.toLowerCase() && isActive(item, interval.day),
     );
-    const planned = plantings.find(
+    const plannedPlanting = plantings.find(
       (item) =>
         item.bed_id === bed.id &&
         item.crop.toLowerCase() === crop.toLowerCase() &&
@@ -354,16 +425,16 @@ async function commit(
     );
     if (existing) {
       plantingId = existing.id;
-    } else if (planned) {
+    } else if (plannedPlanting) {
       // Someone planted what the garden view had planned: the plan becomes the real planting.
       await store.updatePlanting({
-        ...planned,
+        ...plannedPlanting,
         planted_date: interval.day,
-        expected_harvest_date: addDays(interval.day, planned.days_to_maturity),
+        expected_harvest_date: addDays(interval.day, plannedPlanting.days_to_maturity),
         season_year: Number(interval.day.slice(0, 4)),
         source_session_id: session.id,
       });
-      plantingId = planned.id;
+      plantingId = plannedPlanting.id;
     } else {
       const days = maturityDays(crop);
       const created: Planting = {
@@ -403,7 +474,6 @@ async function commit(
     pending: null,
     lastSessionId: session.id,
   });
-  const planned = interval.start.getTime() > now.getTime();
   const phrase = planned
     ? planPhrase(activity, crop, bed?.name ?? null)
     : workPhrase(activity, crop, bed?.name ?? null);
@@ -415,6 +485,103 @@ async function commit(
       : `${label}: ${person.name}, ${when}, ${phrase}.`,
   );
   return session;
+}
+
+/** Turn one draft into one draft per weekday × standing week. */
+export function expandOccurrences(draft: SessionDraft, now: Date, timeZone: string): SessionDraft[] {
+  const days =
+    draft.weekdays?.length > 0
+      ? draft.weekdays
+      : draft.weekday != null
+        ? [draft.weekday]
+        : [null];
+  const weeks = Math.max(1, draft.recurringWeeks || 1);
+  if (days.length === 1 && days[0] == null && weeks === 1) return [draft];
+
+  const out: SessionDraft[] = [];
+  for (let week = 0; week < weeks; week += 1) {
+    for (const weekday of days) {
+      const base: SessionDraft = {
+        ...draft,
+        weekday,
+        weekdays: weekday != null ? [weekday] : [],
+        recurringWeeks: 1,
+        nextWeek: draft.nextWeek || draft.activity === "meeting",
+      };
+      const day = resolveDay(base, now, timeZone);
+      out.push({
+        ...base,
+        onDate: addDays(day, week * 7),
+        weekday: null,
+        weekdays: [],
+        dayOffset: null,
+        nextWeek: false,
+      });
+    }
+  }
+  return out.length ? out : [draft];
+}
+
+async function cancelPlans(
+  store: Store,
+  person: Person,
+  instruction: string,
+  now: Date,
+  say: (line: string) => Promise<void>,
+): Promise<WorkSession | null> {
+  const future = (await store.listSessions())
+    .filter((session) => session.person_id === person.id && new Date(session.start).getTime() > now.getTime())
+    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+  if (future.length === 0) {
+    await say("I don't have a future plan of yours to cancel.");
+    return null;
+  }
+
+  const hint = instruction ? parseDraft(instruction) : null;
+  let targets = future;
+  if (hint?.weekday != null || hint?.weekdays?.length) {
+    const wanted = new Set(hint.weekdays.length ? hint.weekdays : hint.weekday != null ? [hint.weekday] : []);
+    targets = targets.filter((session) => wanted.has(partsInZone(new Date(session.start), person.timezone).weekday));
+  }
+  if (hint?.activity) {
+    targets = targets.filter((session) => session.activity_type === hint.activity);
+  }
+  if (hint?.start && hint.startAmpm) {
+    const hour = to24(hint.start.h, hint.startAmpm);
+    targets = targets.filter((session) => partsInZone(new Date(session.start), person.timezone).hour === hour);
+  }
+  if (hint?.onDate) {
+    const day = resolveStoredDate(hint.onDate, todayYmd(now, person.timezone));
+    if (day) {
+      targets = targets.filter((session) => todayYmd(new Date(session.start), person.timezone) === day);
+    }
+  }
+
+  // Bare "cancel" / "delete" removes the soonest upcoming plan.
+  if (!instruction.trim()) targets = future.slice(0, 1);
+  if (targets.length === 0) {
+    await say("I couldn't find a matching future plan to cancel.");
+    return null;
+  }
+
+  for (const session of targets) await store.deleteSession(session.id);
+  const conversation = await store.getConversation(person.phone);
+  const removedIds = new Set(targets.map((session) => session.id));
+  await store.saveConversation(person.phone, {
+    ...conversation,
+    pending: null,
+    lastSessionId: conversation.lastSessionId && removedIds.has(conversation.lastSessionId)
+      ? null
+      : conversation.lastSessionId,
+  });
+
+  if (targets.length === 1) {
+    const session = targets[0];
+    await say(`Canceled: ${whenPhrase(new Date(session.start), new Date(session.end), now, person.timezone)}.`);
+  } else {
+    await say(`Canceled ${targets.length} upcoming plans.`);
+  }
+  return null;
 }
 
 async function undo(
