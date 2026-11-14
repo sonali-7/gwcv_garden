@@ -145,9 +145,13 @@ export function createMongoStore(uri: string, dbName: string): ConnectedStore {
       return docs(await database(), "tasks");
     },
     async saveTasks(tasks) {
-      const db = await database();
-      await rows(db, "tasks").deleteMany({});
-      if (tasks.length) await rows(db, "tasks").insertMany(tasks.map((task) => ({ ...task, _id: task.id })));
+      const unique = [...new Map(tasks.map((task) => [task.id, task])).values()];
+      // One writer at a time in this process; retries cover Atlas races with another server.
+      saveTasksTail = saveTasksTail.then(
+        async () => writeTasks(rows(await database(), "tasks"), unique),
+        async () => writeTasks(rows(await database(), "tasks"), unique),
+      );
+      await saveTasksTail;
     },
     async getThread(phone) {
       const doc = await rows(await database(), "threads").findOne({ _id: phone });
@@ -190,6 +194,39 @@ export function createMongoStore(uri: string, dbName: string): ConnectedStore {
   };
 }
 
+/** Serialize task rewrites so Strict Mode / two tabs don't collide in one Node process. */
+let saveTasksTail: Promise<void> = Promise.resolve();
+
+function isDupKey(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as { code: number }).code === 11000);
+}
+
+async function writeTasks(col: Collection<Row>, tasks: Array<{ id: string } & Record<string, unknown>>): Promise<void> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      if (tasks.length === 0) {
+        await col.deleteMany({});
+        return;
+      }
+      for (const task of tasks) {
+        const doc = { ...task, _id: task.id };
+        try {
+          await col.replaceOne({ _id: task.id }, doc, { upsert: true });
+        } catch (error) {
+          // Concurrent upserts of a missing _id can both try to insert; the loser retries as update.
+          if (!isDupKey(error)) throw error;
+          await col.replaceOne({ _id: task.id }, doc);
+        }
+      }
+      await col.deleteMany({ _id: { $nin: tasks.map((task) => task.id) } });
+      return;
+    } catch (error) {
+      if (!isDupKey(error) || attempt === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+}
+
 async function writeAll(db: Db, data: DatabaseShape): Promise<void> {
   const collections = ["gardenConfig", "people", "beds", "plantings", "workSessions", "photos", "tasks", "threads", "conversations", "meta"];
   for (const name of collections) await rows(db, name).deleteMany({});
@@ -202,7 +239,10 @@ async function writeAll(db: Db, data: DatabaseShape): Promise<void> {
     await rows(db, "workSessions").insertMany(data.sessions.map((item) => ({ ...item, _id: item.id })));
   }
   if (data.photos.length) await rows(db, "photos").insertMany(data.photos.map((item) => ({ ...item, _id: item.id })));
-  if (data.tasks.length) await rows(db, "tasks").insertMany(data.tasks.map((item) => ({ ...item, _id: item.id })));
+  if (data.tasks.length) {
+    const tasks = [...new Map(data.tasks.map((item) => [item.id, item])).values()];
+    await rows(db, "tasks").insertMany(tasks.map((item) => ({ ...item, _id: item.id })));
+  }
   const threads = Object.entries(data.threads);
   if (threads.length) {
     await rows(db, "threads").insertMany(threads.map(([phone, messages]) => ({ _id: phone, messages })));

@@ -111,7 +111,8 @@ export function buildTasks(input: {
 
   const severityRank = { urgent: 0, upcoming: 1, routine: 2 };
   const typeRank = { water: 0, harvest: 1, fill: 2, meeting: 3 };
-  return tasks.sort((a, b) => severityRank[a.severity] - severityRank[b.severity] || typeRank[a.type] - typeRank[b.type]);
+  const unique = [...new Map(tasks.map((task) => [task.id, task])).values()];
+  return unique.sort((a, b) => severityRank[a.severity] - severityRank[b.severity] || typeRank[a.type] - typeRank[b.type]);
 }
 
 function harvestTitle(crop: string, days: number): string {
