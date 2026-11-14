@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { sessionStatus, slicesForSession } from "./calendar";
+import { placeSlices, sessionStatus, slicesForSession } from "./calendar";
 import { loadDashboard } from "./dashboard-data";
 import { handleIncoming } from "./handle-message";
 import { createMemoryStore } from "./memory-store";
@@ -166,6 +166,36 @@ describe("session status", () => {
     assert.equal(at("2026-11-14T15:00:00.000Z", "2026-11-14T16:00:00.000Z"), "now");
     assert.equal(at("2026-11-14T16:00:00.000Z", "2026-11-14T17:00:00.000Z"), "planned");
     assert.equal(at("2026-11-14T14:00:00.000Z", "2026-11-14T15:00:00.000Z"), "done");
+  });
+});
+
+describe("calendar lanes", () => {
+  const slice = (sessionId: string, startMin: number, endMin: number) => ({
+    sessionId,
+    day: "2026-11-14",
+    topPx: 0,
+    heightPx: 0,
+    startMin,
+    endMin,
+  });
+  const byId = (placed: ReturnType<typeof placeSlices>) =>
+    Object.fromEntries(placed.map((item) => [item.sessionId, { lane: item.lane, lanes: item.lanes }]));
+
+  it("only splits blocks that overlap, not the whole day", () => {
+    const placed = byId(placeSlices([slice("hi", 120, 240), slice("emma-a", 480, 540), slice("emma-b", 480, 540)]));
+    assert.deepEqual(placed.hi, { lane: 0, lanes: 1 });
+    assert.deepEqual(placed["emma-a"].lanes, 2);
+    assert.deepEqual(placed["emma-b"].lanes, 2);
+    assert.notEqual(placed["emma-a"].lane, placed["emma-b"].lane);
+  });
+
+  it("keeps a chain of overlaps in one group, and back-to-back blocks full width", () => {
+    const placed = byId(placeSlices([slice("a", 0, 120), slice("b", 60, 180), slice("c", 150, 240), slice("d", 240, 300)]));
+    assert.equal(placed.a.lanes, 2);
+    assert.equal(placed.b.lanes, 2);
+    assert.equal(placed.c.lanes, 2);
+    assert.equal(placed.c.lane, 0);
+    assert.deepEqual(placed.d, { lane: 0, lanes: 1 });
   });
 });
 

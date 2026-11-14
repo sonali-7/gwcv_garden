@@ -56,8 +56,17 @@ export function placeSlices(slices: DaySlice[]): PlacedSlice[] {
   const placed: PlacedSlice[] = [];
   for (const list of byDay.values()) {
     const sorted = [...list].sort((a, b) => a.startMin - b.startMin || b.endMin - a.endMin);
-    const laneEnds: number[] = [];
-    const draft = sorted.map((slice) => {
+    let group: Array<DaySlice & { lane: number }> = [];
+    let laneEnds: number[] = [];
+    let groupEnd = -1;
+    const flush = () => {
+      const lanes = Math.max(1, laneEnds.length);
+      for (const slice of group) placed.push({ ...slice, lanes });
+      group = [];
+      laneEnds = [];
+    };
+    for (const slice of sorted) {
+      if (group.length > 0 && slice.startMin >= groupEnd) flush();
       let lane = laneEnds.findIndex((end) => end <= slice.startMin);
       if (lane === -1) {
         lane = laneEnds.length;
@@ -65,10 +74,10 @@ export function placeSlices(slices: DaySlice[]): PlacedSlice[] {
       } else {
         laneEnds[lane] = slice.endMin;
       }
-      return { ...slice, lane };
-    });
-    const lanes = Math.max(1, laneEnds.length);
-    for (const slice of draft) placed.push({ ...slice, lanes });
+      group.push({ ...slice, lane });
+      groupEnd = group.length === 1 ? slice.endMin : Math.max(groupEnd, slice.endMin);
+    }
+    if (group.length > 0) flush();
   }
   return placed;
 }
