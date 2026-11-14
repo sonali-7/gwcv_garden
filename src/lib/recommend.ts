@@ -26,6 +26,8 @@ export type Recommendation = {
   soil: string;
   /** First date the crop could go in this bed (bed free and inside its sowing window). */
   plantOn: string;
+  /** First date it could go in next to what's already in the bed (not before tomorrow, and inside its sowing window). */
+  alongsideOn: string;
   now: boolean;
   cover: boolean;
 };
@@ -156,7 +158,9 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
       reasons.push("Cover crop: protects bare soil and feeds it for spring.");
     }
 
+    const earliest = day > today ? day : addDays(today, 1);
     recommendations.push({
+      alongsideOn: nextSowDate(earliest, item.sowMonths),
       crop: item.crop,
       family: family.family,
       score,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { spriteDataUrl, spriteUrl, TILES } from "@/lib/pixel-sprites";
 import { fromFt, gridStepFt, showSize, toFt, type Units } from "@/lib/units";
 import { inGroundOn, plannedAfter } from "@/lib/plantings";
@@ -10,6 +10,10 @@ type Geometry = NonNullable<Bed["geometry"]>;
 type Drag = { id: string; mode: "move" | "resize"; startX: number; startY: number; origin: Geometry; current: Geometry };
 
 export const CROP_MIME = "application/x-garden-crop";
+
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
+const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
 
 /** Beds saved before the map existed have no geometry. Stack them down the left edge. */
 export function placed(beds: Bed[], layout: GardenLayout): Array<Bed & { geometry: Geometry }> {
@@ -49,6 +53,50 @@ export function GardenMap(props: {
   const [dropId, setDropId] = useState<string | null>(null);
   const [showPhoto, setShowPhoto] = useState(true);
   const [pxPerFt, setPxPerFt] = useState(20);
+  // Zoom makes the map wider than its card; the viewport around it scrolls.
+  const viewport = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
+  // Keeps the spot under the pointer (or the middle of the view) in place while zooming.
+  // `contentX/Y` is that spot on the map before the zoom; `x/y` is where it sits in the viewport.
+  const anchor = useRef<{ contentX: number; contentY: number; x: number; y: number; from: number } | null>(null);
+
+  function zoomTo(next: number, at?: { x: number; y: number }) {
+    const el = viewport.current;
+    const target = clampZoom(next);
+    if (!el || target === zoomRef.current) return;
+    const point = at ?? { x: el.clientWidth / 2, y: el.clientHeight / 2 };
+    anchor.current = { contentX: el.scrollLeft + point.x, contentY: el.scrollTop + point.y, ...point, from: zoomRef.current };
+    zoomRef.current = target;
+    setZoom(target);
+  }
+
+  // Runs after the map has its new size, before the browser paints, so the view doesn't jump.
+  useLayoutEffect(() => {
+    const el = viewport.current;
+    const a = anchor.current;
+    if (!el || !a) return;
+    const ratio = zoom / a.from;
+    el.scrollLeft = a.contentX * ratio - a.x;
+    el.scrollTop = a.contentY * ratio - a.y;
+    anchor.current = null;
+  }, [zoom]);
+
+  // Ctrl/Cmd + scroll, or a trackpad pinch (which browsers send as ctrl + wheel), zooms around the pointer.
+  useEffect(() => {
+    const el = viewport.current;
+    if (!el) return;
+    function onWheel(event: WheelEvent) {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const rect = el!.getBoundingClientRect();
+      zoomTo(zoomRef.current * Math.exp(-event.deltaY * 0.01), { x: event.clientX - rect.left, y: event.clientY - rect.top });
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // zoomTo only reads refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const el = surface.current;
@@ -60,8 +108,8 @@ export function GardenMap(props: {
     return () => observer.disconnect();
   }, [layout.widthFt]);
 
-  // About one plant drawing per 2.5 ft, kept between 18 and 44 px so it stays readable.
-  const spritePx = Math.round(Math.min(44, Math.max(18, pxPerFt * 2.5)) / 2) * 2;
+  // About one plant drawing per 2.5 ft, kept between 18 and 44 px so it stays readable (bigger when zoomed in).
+  const spritePx = Math.round(Math.min(44 * Math.sqrt(zoom), Math.max(18, pxPerFt * 2.5)) / 2) * 2;
 
   const beds = placed(props.beds, layout);
   const legend = new Map<string, string>();
@@ -169,6 +217,17 @@ export function GardenMap(props: {
           </span>
         </div>
         <div className="map-tools">
+          <div className="zoom" role="group" aria-label="Zoom">
+            <button type="button" className="icon-btn" onClick={() => zoomTo(zoomRef.current / 1.5)} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" title="Zoom out (or Ctrl/⌘ + scroll, or pinch)">
+              −
+            </button>
+            <button type="button" className="icon-btn zoom-level" onClick={() => zoomTo(1)} disabled={zoom === 1} title="Fit the whole garden">
+              {zoom === 1 ? "Fit" : `${Math.round(zoom * 100)}%`}
+            </button>
+            <button type="button" className="icon-btn" onClick={() => zoomTo(zoomRef.current * 1.5)} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" title="Zoom in (or Ctrl/⌘ + scroll, or pinch)">
+              +
+            </button>
+          </div>
           {layout.imageUrl ? (
             <button type="button" className="texty" onClick={() => setShowPhoto((v) => !v)}>
               {showPhoto ? "Hide photo" : "Show photo"}
@@ -215,10 +274,11 @@ export function GardenMap(props: {
         </div>
       </div>
 
+      <div ref={viewport} className={`map-viewport${zoom > 1 ? " zoomed" : ""}`}>
       <div
         ref={surface}
         className={`map-surface${editing ? " editing" : ""}`}
-        style={surfaceStyle}
+        style={{ ...surfaceStyle, width: `${zoom * 100}%` }}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
@@ -253,11 +313,13 @@ export function GardenMap(props: {
             .filter((p) => p.bed_id === bed.id && plannedAfter(p, props.day, props.today))
             .sort((a, b) => a.planted_date.localeCompare(b.planted_date));
           const crop = current[0]?.crop ?? null;
-          const shownCrops = [...new Set((current.length ? current : planned.slice(0, 1)).map((p) => p.crop))];
+          // An empty bed shows everything planned for its next planting date, so plans made side by side show together.
+          const nextPlanned = planned.filter((p) => p.planted_date === planned[0]?.planted_date);
+          const shownCrops = [...new Set((current.length ? current : nextPlanned).map((p) => p.crop))];
           const cropText = current.length
             ? shownCrops.join(" + ")
-            : planned[0]
-              ? `${planned[0].crop} planned`
+            : nextPlanned.length
+              ? `${shownCrops.join(" + ")} planned`
               : "open";
           // Beds drawn from a plan are often named after their crops; don't say it twice.
           const sayCrops = !shownCrops.length || !shownCrops.every((c) => bed.name.toLowerCase().includes(c.slice(0, 4)));
@@ -364,6 +426,7 @@ export function GardenMap(props: {
             </div>
           );
         })}
+      </div>
       </div>
 
       <div className="map-foot">

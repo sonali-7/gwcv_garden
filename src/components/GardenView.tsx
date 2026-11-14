@@ -108,18 +108,25 @@ export function GardenView({ initial }: { initial: GardenData }) {
     });
   }
 
-  function plan(bedId: string, crop: string) {
+  /** Plan a crop in a bed: "after" waits until the bed is free; "alongside" shares the bed with what's there. */
+  function plan(bedId: string, crop: string, how: "after" | "alongside" = "after") {
     const bed = data.beds.find((item) => item.id === bedId);
     if (!bed || mode === "past") return;
     const rec: Recommendation | undefined = advice.get(bedId)?.recommendations.find((item) => item.crop === crop);
     const avoided = advice.get(bedId)?.avoid.find((item) => item.crop === crop);
     if (avoided && !window.confirm(`${avoided.reason} Plan ${crop} here anyway?`)) return;
-    const best = rec?.plantOn ?? advice.get(bedId)?.freeFrom ?? day;
+    const best = how === "alongside" ? (rec?.alongsideOn ?? day) : (rec?.plantOn ?? advice.get(bedId)?.freeFrom ?? day);
     const date = best > data.today ? best : addOne(data.today);
+    const company = advice.get(bedId)?.current.map((p) => p.crop).filter((c) => c !== crop) ?? [];
+    const label = new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
     run(async () => {
       await send("/api/plantings", "POST", { bed_id: bedId, crop, planted_date: date });
       setSelectedId(bedId);
-      setNotice(`Planned ${crop} for ${bed.name} on ${new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}.`);
+      setNotice(
+        how === "alongside" && company.length
+          ? `Planned ${crop} alongside the ${company.join(" and ")} in ${bed.name} on ${label}.`
+          : `Planned ${crop} for ${bed.name} on ${label}.`,
+      );
     });
   }
 

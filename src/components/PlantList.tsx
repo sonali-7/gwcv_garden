@@ -51,7 +51,7 @@ export function PlantList(props: {
   editing: boolean;
   busy: boolean;
   onSelect: (id: string | null) => void;
-  onPlan: (bedId: string, crop: string) => void;
+  onPlan: (bedId: string, crop: string, how?: "after" | "alongside") => void;
   onRename: (bed: Bed, name: string) => void;
   onDeleteBed: (bed: Bed) => void;
   onUnplan: (plantingId: string) => void;
@@ -107,6 +107,7 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
           const now = a?.current[0];
           const next = a?.planned[0];
           const others = (a?.current ?? []).slice(1).map((p) => p.crop);
+          const nextCrops = [...new Set((a?.planned ?? []).filter((p) => p.planted_date === next?.planted_date).map((p) => p.crop))];
           return (
             <li key={bed.id}>
               <button type="button" onClick={() => props.onSelect(bed.id)}>
@@ -121,7 +122,7 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
                     {now
                       ? statusLine(now, data.today) + (others.length ? ` · also ${others.join(", ")}` : "")
                       : next
-                        ? `${title(next.crop)} planned for ${shortDate(next.planted_date)}`
+                        ? `${title(nextCrops.join(" + "))} planned for ${shortDate(next.planted_date)}`
                         : props.mode === "past"
                           ? "Empty"
                           : "Open"}
@@ -160,6 +161,8 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
     .slice(0, 3);
   const tasks = data.tasks.filter((task) => task.bed_id === bed.id);
   const recs = a.recommendations.slice(0, more ? 8 : 3);
+  // What a new crop would share the bed with, or follow.
+  const occupant = [...new Set([...a.current, ...a.planned].map((p) => p.crop))].join(" and ") || null;
   const g = bed.geometry;
 
   return (
@@ -250,7 +253,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
       {props.mode === "past" ? null : (
       <section className="block">
         <h3>
-          {a.current.length || a.planned.length ? `Plant next (bed free ${shortDate(a.freeFrom)})` : "Suggested for this bed"}
+          {occupant ? `Add to this bed (free ${shortDate(a.freeFrom)})` : "Suggested for this bed"}
         </h3>
         <div className="recs">
           {recs.map((rec) => (
@@ -294,9 +297,32 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
                 <a href={seedLink(rec.crop, data.layout.location)} target="_blank" rel="noreferrer">
                   Find seeds nearby ↗
                 </a>
-                <button type="button" className="pill" onClick={() => props.onPlan(bed.id, rec.crop)} disabled={props.busy}>
-                  Add to plan
-                </button>
+                {occupant ? (
+                  <span className="rec-actions">
+                    <button
+                      type="button"
+                      className="pill"
+                      onClick={() => props.onPlan(bed.id, rec.crop, "alongside")}
+                      disabled={props.busy}
+                      title={`Share the bed with the ${occupant}, from ${shortDate(rec.alongsideOn, true)}`}
+                    >
+                      Plant alongside
+                    </button>
+                    <button
+                      type="button"
+                      className="pill"
+                      onClick={() => props.onPlan(bed.id, rec.crop, "after")}
+                      disabled={props.busy}
+                      title={`After the ${occupant}, from ${shortDate(rec.plantOn, true)}`}
+                    >
+                      Plant after
+                    </button>
+                  </span>
+                ) : (
+                  <button type="button" className="pill" onClick={() => props.onPlan(bed.id, rec.crop)} disabled={props.busy}>
+                    Add to plan
+                  </button>
+                )}
               </footer>
             </article>
           ))}

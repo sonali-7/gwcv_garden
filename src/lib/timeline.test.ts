@@ -64,6 +64,17 @@ describe("garden timeline: advice for another date", () => {
     assert.ok(now?.reasons[0].startsWith("Can go in then"), now?.reasons[0]);
   });
 
+  it("offers a date to plant alongside what's there, never before tomorrow", () => {
+    const advice = adviseBed(bed("bed-carrot"), seed.plantings, today);
+    assert.equal(advice.current[0]?.crop, "carrots");
+    for (const rec of advice.recommendations) {
+      assert.ok(rec.alongsideOn > today, `${rec.crop} ${rec.alongsideOn}`);
+      assert.ok(rec.alongsideOn <= rec.plantOn, `${rec.crop}: alongside ${rec.alongsideOn} is after ${rec.plantOn}`);
+    }
+    const ahead = adviseBed(bed("bed-carrot"), seed.plantings, "2027-04-10", today);
+    assert.ok(ahead.recommendations.every((rec) => rec.alongsideOn >= "2027-04-10"));
+  });
+
   it("matches the old behavior on today", () => {
     const advice = adviseBed(bed("bed-sp"), seed.plantings, today);
     assert.equal(advice.current[0]?.crop, "sweet potato");
