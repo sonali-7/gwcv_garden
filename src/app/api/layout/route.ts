@@ -20,11 +20,13 @@ export async function PUT(request: Request) {
   const layout = await store.getLayout();
   const size = (value: unknown, fallback: number) => {
     const n = Number(value);
-    return Number.isFinite(n) && n >= 5 && n <= 1000 ? Math.round(n) : fallback;
+    return Number.isFinite(n) && n >= 3 && n <= 1000 ? Math.round(n * 10) / 10 : fallback;
   };
   const next = { ...layout };
   if ("widthFt" in body) next.widthFt = size(body.widthFt, layout.widthFt);
   if ("lengthFt" in body) next.lengthFt = size(body.lengthFt, layout.lengthFt);
+  if (body.units === "ft" || body.units === "m") next.units = body.units;
+  if (body.outline === null) next.outline = null;
   if (typeof body.location === "string") next.location = body.location.replace(/\s+/g, " ").trim().slice(0, 80);
   if (body.imageDataUrl === null) next.imageUrl = null;
   if (typeof body.imageDataUrl === "string") {

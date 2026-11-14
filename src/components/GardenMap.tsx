@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { spriteDataUrl, spriteUrl, TILES } from "@/lib/pixel-sprites";
+import { fromFt, gridStepFt, showSize, toFt, type Units } from "@/lib/units";
 import { isActive } from "@/lib/plantings";
 import type { Bed, GardenLayout, Planting, Task } from "@/lib/types";
 
@@ -63,8 +64,9 @@ export function GardenMap(props: {
   const beds = placed(props.beds, layout);
   const legend = new Map<string, string>();
   for (const bed of beds) {
-    const crop = props.plantings.find((p) => p.bed_id === bed.id && isActive(p, props.today))?.crop;
-    if (crop && !legend.has(crop)) legend.set(crop, spriteUrl(crop, props.sprites));
+    for (const p of props.plantings) {
+      if (p.bed_id === bed.id && isActive(p, props.today) && !legend.has(p.crop)) legend.set(p.crop, spriteUrl(p.crop, props.sprites));
+    }
   }
 
   function feetPerPixel() {
@@ -130,13 +132,19 @@ export function GardenMap(props: {
     reader.readAsDataURL(file);
   }
 
-  const gridX = (5 / layout.widthFt) * 100;
-  const gridY = (5 / layout.lengthFt) * 100;
-  const surfaceStyle: CSSProperties = {
-    aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`,
+  const units: Units = layout.units ?? "ft";
+  const step = gridStepFt(units);
+  const gridX = (step / layout.widthFt) * 100;
+  const gridY = (step / layout.lengthFt) * 100;
+  const lawn: CSSProperties = {
     backgroundImage: `linear-gradient(to right, rgba(43, 29, 20, 0.12) 2px, transparent 2px), linear-gradient(to bottom, rgba(43, 29, 20, 0.12) 2px, transparent 2px), ${TILES.grass}`,
     backgroundSize: `${gridX}% ${gridY}%, ${gridX}% ${gridY}%, 24px 24px`,
   };
+  const shape = layout.outline && layout.outline.length >= 3 ? layout.outline : null;
+  const shapePct = shape?.map(([x, y]) => [(x / layout.widthFt) * 100, (y / layout.lengthFt) * 100]) ?? null;
+  const surfaceStyle: CSSProperties = shapePct
+    ? { aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`, backgroundImage: TILES.path, backgroundSize: "24px 24px" }
+    : { aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`, ...lawn };
 
   return (
     <section className="map-card" aria-label="Garden map">
@@ -220,9 +228,21 @@ export function GardenMap(props: {
           // eslint-disable-next-line @next/next/no-img-element
           <img className="map-photo" src={layout.imageUrl} alt="" draggable={false} />
         ) : null}
+        {shapePct ? (
+          <>
+            <div
+              className="lawn"
+              aria-hidden="true"
+              style={{ ...lawn, clipPath: `polygon(${shapePct.map(([x, y]) => `${x}% ${y}%`).join(", ")})` }}
+            />
+            <svg className="lawn-edge" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <polygon points={shapePct.map(([x, y]) => `${x},${y}`).join(" ")} />
+            </svg>
+          </>
+        ) : null}
         <div className="scale" aria-hidden="true">
           <span className="scale-bar" style={{ width: `${gridX}%` }} />
-          <span>5 ft</span>
+          <span>{units === "m" ? "1 m" : "5 ft"}</span>
         </div>
         {beds.map((bed) => {
           const g = drag?.id === bed.id ? drag.current : bed.geometry;
@@ -231,20 +251,36 @@ export function GardenMap(props: {
             .filter((p) => p.bed_id === bed.id && p.planted_date > props.today && !p.removed_date)
             .sort((a, b) => a.planted_date.localeCompare(b.planted_date));
           const crop = current[0]?.crop ?? null;
-          const shown = crop ?? planned[0]?.crop ?? null;
+          const shownCrops = [...new Set((current.length ? current : planned.slice(0, 1)).map((p) => p.crop))];
+          const cropText = current.length
+            ? shownCrops.join(" + ")
+            : planned[0]
+              ? `${planned[0].crop} planned`
+              : "open";
+          // Beds drawn from a plan are often named after their crops; don't say it twice.
+          const sayCrops = !shownCrops.length || !shownCrops.every((c) => bed.name.toLowerCase().includes(c.slice(0, 4)));
+          const bedPxH = g.h * pxPerFt;
+          const bedPxW = g.w * pxPerFt;
+          const compact = bedPxH < 48;
+          const inset = compact ? 4 : 8;
+          const cell = Math.max(10, Math.min(spritePx, bedPxH - inset * 2, bedPxW - inset * 2));
+          const cols = Math.max(1, Math.floor((bedPxW - inset * 2) / cell));
+          const rowsN = Math.max(1, Math.floor((bedPxH - inset * 2) / cell));
+          const cells = Math.min(cols * rowsN, 160);
           const tasks = props.tasks.filter((task) => task.bed_id === bed.id);
           const urgent = tasks.find((task) => task.severity === "urgent");
           const upcoming = tasks.find((task) => task.severity === "upcoming");
           const state = crop ? "growing" : planned.length ? "planned" : "open";
-          const tall = g.h / layout.lengthFt > 0.12;
+          const tall = !compact && (g.h / layout.lengthFt > 0.12 || g.w / layout.widthFt > 0.3);
           return (
             <div
               key={bed.id}
               role="button"
               tabIndex={0}
               aria-pressed={props.selectedId === bed.id}
-              aria-label={`${bed.name}: ${crop ?? (planned[0] ? `${planned[0].crop} planned` : "open")}`}
-              className={`bed ${state}${props.selectedId === bed.id ? " selected" : ""}${dropId === bed.id ? " drop" : ""}`}
+              aria-label={`${bed.name}: ${cropText}`}
+              title={`${bed.name}: ${cropText}`}
+              className={`bed ${state}${compact ? " compact" : ""}${props.selectedId === bed.id ? " selected" : ""}${dropId === bed.id ? " drop" : ""}`}
               style={
                 {
                   left: `${(g.x / layout.widthFt) * 100}%`,
@@ -281,21 +317,27 @@ export function GardenMap(props: {
                 }
               }}
             >
-              {shown ? (
+              {shownCrops.length ? (
                 <span
                   className="bed-crops"
                   aria-hidden="true"
-                  style={{
-                    backgroundImage: `url("${spriteUrl(shown, props.sprites)}")`,
-                    backgroundSize: `${spritePx}px ${spritePx}px`,
-                  }}
-                />
+                  style={{ inset, gridTemplateColumns: `repeat(${cols}, ${cell}px)`, gridAutoRows: `${cell}px` }}
+                >
+                  {Array.from({ length: cells }, (_, i) => {
+                    const r = Math.floor(i / cols);
+                    const c = i % cols;
+                    // Mixed beds alternate their crops in a checker pattern.
+                    const which = shownCrops[(r + c) % shownCrops.length];
+                    return (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img key={i} src={spriteUrl(which, props.sprites)} alt="" width={cell} height={cell} draggable={false} />
+                    );
+                  })}
+                </span>
               ) : null}
               <span className="bed-label">
                 <strong>{bed.name}</strong>
-                {tall || g.w / layout.widthFt > 0.3 ? (
-                  <em>{crop ?? (planned[0] ? `${planned[0].crop} planned` : "open")}</em>
-                ) : null}
+                {tall && sayCrops ? <em>{cropText}</em> : null}
               </span>
               <span className="bed-flags">
                 {urgent ? (
@@ -309,9 +351,7 @@ export function GardenMap(props: {
               </span>
               {editing ? (
                 <>
-                  <span className="bed-size">
-                    {g.w}×{g.h} ft
-                  </span>
+                  <span className="bed-size">{showSize(g.w, g.h, units)}</span>
                   <span
                     className="resize"
                     aria-hidden="true"
@@ -331,32 +371,39 @@ export function GardenMap(props: {
               Width
               <input
                 type="number"
-                min={5}
-                max={1000}
-                defaultValue={layout.widthFt}
-                key={`w${layout.widthFt}`}
+                min={1}
+                step={0.5}
+                defaultValue={fromFt(layout.widthFt, units)}
+                key={`w${layout.widthFt}${units}`}
                 onBlur={(event) => {
-                  const value = Number(event.target.value);
-                  if (value !== layout.widthFt) props.onLayout({ widthFt: value });
+                  const value = toFt(Number(event.target.value), units);
+                  if (Math.abs(value - layout.widthFt) > 0.05) props.onLayout({ widthFt: value });
                 }}
               />
-              ft
             </label>
             <label>
               Length
               <input
                 type="number"
-                min={5}
-                max={1000}
-                defaultValue={layout.lengthFt}
-                key={`l${layout.lengthFt}`}
+                min={1}
+                step={0.5}
+                defaultValue={fromFt(layout.lengthFt, units)}
+                key={`l${layout.lengthFt}${units}`}
                 onBlur={(event) => {
-                  const value = Number(event.target.value);
-                  if (value !== layout.lengthFt) props.onLayout({ lengthFt: value });
+                  const value = toFt(Number(event.target.value), units);
+                  if (Math.abs(value - layout.lengthFt) > 0.05) props.onLayout({ lengthFt: value });
                 }}
               />
-              ft
             </label>
+            <select aria-label="Units" value={units} onChange={(event) => props.onLayout({ units: event.target.value as Units })}>
+              <option value="ft">ft</option>
+              <option value="m">m</option>
+            </select>
+            {shape ? (
+              <button type="button" className="texty" onClick={() => props.onLayout({ outline: null })}>
+                Make it a rectangle
+              </button>
+            ) : null}
             <label className="wide">
               Near
               <input
@@ -380,7 +427,7 @@ export function GardenMap(props: {
           </div>
         ) : (
           <p className="map-hint">
-            {layout.widthFt} × {layout.lengthFt} ft · click a bed for details, drag a suggestion onto a bed to plan it
+            {showSize(layout.widthFt, layout.lengthFt, units)} · click a bed for details, drag a suggestion onto a bed to plan it
           </p>
         )}
       </div>

@@ -186,13 +186,9 @@ export function GardenView({ initial }: { initial: GardenData }) {
             result.created ? `${result.created} new bed${result.created === 1 ? "" : "s"}` : "",
             result.moved ? `${result.moved} moved` : "",
             result.removed ? `${result.removed} removed` : "",
+            result.archived.length ? `${result.archived.length} archived` : "",
           ].filter(Boolean);
           setNotice(`Garden built: ${bits.join(", ") || "no changes"}.`);
-          if (result.kept.length) {
-            setError(
-              `Kept ${result.kept.join(", ")} because ${result.kept.length === 1 ? "it has" : "they have"} planting history. Use Edit layout to move or rename ${result.kept.length === 1 ? "it" : "them"}.`,
-            );
-          }
           void reload();
         }}
       />

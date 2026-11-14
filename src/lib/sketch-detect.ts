@@ -20,7 +20,19 @@ export type DetectedBed = {
   parts: number;
   color: string | null;
 };
-export type Detection = { width: number; height: number; frame: Rect; frameFromBorder: boolean; beds: DetectedBed[] };
+export type Point = { x: number; y: number };
+export type Edge = { label: string; a: Point; b: Point; length: number };
+export type Detection = {
+  width: number;
+  height: number;
+  frame: Rect;
+  frameFromBorder: boolean;
+  beds: DetectedBed[];
+  /** The garden's outer shape, when it was drawn as a closed line around the beds. */
+  outline: Point[] | null;
+  /** The outline's longer sides, lettered, so dimensions written along them can be matched. */
+  edges: Edge[];
+};
 export type DetectOptions = { sensitivity?: number };
 
 type Region = { area: number; minX: number; minY: number; maxX: number; maxY: number; rowMin: Int32Array; rowMax: Int32Array };
@@ -57,8 +69,13 @@ export function detectSketch(img: Raster, options: DetectOptions = {}): Detectio
     ink[i] = isColor || lum[i] < local[i] - delta || lum[i] < 70 ? 1 : 0;
   }
 
+  // Writing is ink too, and a label that fills its box would break the box's inside into slivers.
+  // Lift out small separate marks (letters, numbers) before looking for shapes.
+  const textMax = Math.max(6, Math.round(Math.max(W, H) * 0.03));
+  eraseSmallMarks(ink, colorful, W, H, textMax);
+
   // Thicken lines a little so small gaps at hand-drawn corners close up.
-  const r = Math.max(1, Math.round(Math.min(W, H) / 220));
+  const r = Math.max(1, Math.round(Math.min(W, H) / 450));
   const thick = dilate(ink, W, H, r);
 
   // Everything light that can be reached from the edge of the picture is "outside".
@@ -88,22 +105,51 @@ export function detectSketch(img: Raster, options: DetectOptions = {}): Detectio
     if (i >= W) push(i - W);
     if (i < N - W) push(i + W);
   }
+  // The thick lines kept "outside" a few pixels away from every line. Walk those last pixels
+  // (through thin, undilated ink only) so writing inside a box can't split the box apart.
+  {
+    const dist = new Uint8Array(N);
+    const q2 = new Int32Array(N);
+    let h2 = 0;
+    let t2 = 0;
+    for (let i = 0; i < N; i++) if (outside[i]) q2[t2++] = i;
+    while (h2 < t2) {
+      const i = q2[h2++];
+      if (dist[i] > r + 1) continue;
+      const x = i % W;
+      const next = [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, i >= W ? i - W : -1, i < N - W ? i + W : -1];
+      for (const j of next) {
+        if (j >= 0 && !outside[j] && !ink[j]) {
+          outside[j] = 1;
+          dist[j] = dist[i] + 1;
+          q2[t2++] = j;
+        }
+      }
+    }
+  }
 
-  const minArea = Math.max(30, N * 0.0015);
+  const minArea = Math.max(30, N * 0.00015);
   // Light areas that are enclosed by lines: the insides of drawn boxes.
-  const enclosed = regions(W, H, (i) => !thick[i] && !outside[i]).filter((g) => g.area >= minArea);
+  const enclosed = mergeCut(
+    regions(W, H, (i) => !ink[i] && !outside[i]).filter((g) => g.area >= minArea),
+    W,
+    H,
+    r,
+  );
   // Solid color blocks.
   const fills = regions(W, H, (i) => colorful[i] === 1).filter(
     (g) => g.area >= minArea && g.area / ((g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)) >= 0.55,
   );
 
   // Measure the pen width so rectangles land on the middle of the drawn lines.
-  const pad = r + Math.ceil(lineWidth(enclosed, ink, W, H, r) / 2);
+  const pad = Math.ceil(lineWidth(enclosed, ink, W, H, r) / 2);
+  // Slivers (between a doubled line, say) are too thin to be beds.
+  const minSide = Math.max(5, Math.round(Math.max(W, H) * 0.005));
   type Candidate = { region: Region; source: "outline" | "fill"; rect: Rect };
   const candidates: Candidate[] = [
     ...enclosed.map((region) => ({ region, source: "outline" as const, rect: grow(bbox(region), pad, W, H) })),
     ...fills.map((region) => ({ region, source: "fill" as const, rect: bbox(region) })),
-  ].filter((c) => c.rect.w >= 4 && c.rect.h >= 4);
+  ].filter((c) => c.rect.w >= minSide && c.rect.h >= minSide);
 
   // Drop color blocks that sit inside an outlined box we already found (a colored-in bed).
   const deduped = candidates.filter(
@@ -138,18 +184,34 @@ export function detectSketch(img: Raster, options: DetectOptions = {}): Detectio
   );
 
   const out: DetectedBed[] = [];
+  let groupCount = 0;
   beds
     .sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x)
-    .forEach((c, group) => {
+    .forEach((c) => {
       const color = c.source === "fill" ? meanColor(c.region, colorful, data, W) : null;
       const pieces = c.source === "outline" ? splitStepped(c.region, pad, W, H) : [c.rect];
+      // A triangle or sliver that isn't an L either is leftover space between other shapes, not a bed.
+      const fill = c.region.area / (bbox(c.region).w * bbox(c.region).h);
+      if (c.source === "outline" && pieces.length === 1 && fill < 0.7) return;
+      const group = groupCount++;
       pieces.forEach((rect, part) => out.push({ rect, source: c.source, group, part, parts: pieces.length, color }));
     });
 
   let finalFrame: Rect;
   let fromBorder = false;
+  let outline: Point[] | null = null;
   if (frame) {
-    finalFrame = frame;
+    // The whole drawn garden: its edge line, the beds, and anything touching them.
+    const f = deduped[frameIndex].region;
+    const seedY = Math.round((f.minY + f.maxY) / 2);
+    const seed = f.rowMin[seedY] >= 0 ? seedY * W + f.rowMin[seedY] : -1;
+    const garden = seed >= 0 ? componentAt(W, H, seed, (i) => !outside[i]) : null;
+    if (garden) {
+      finalFrame = bbox(garden);
+      outline = simplify(spanPolygon(garden), Math.max(2, Math.max(W, H) * 0.006));
+    } else {
+      finalFrame = frame;
+    }
     fromBorder = true;
   } else if (out.length) {
     const minX = Math.min(...out.map((b) => b.rect.x));
@@ -162,7 +224,294 @@ export function detectSketch(img: Raster, options: DetectOptions = {}): Detectio
     finalFrame = { x: 0, y: 0, w: W, h: H };
   }
 
-  return { width: W, height: H, frame: finalFrame, frameFromBorder: fromBorder, beds: out };
+  return {
+    width: W,
+    height: H,
+    frame: finalFrame,
+    frameFromBorder: fromBorder,
+    beds: out,
+    outline,
+    edges: outline ? letteredEdges(outline) : [],
+  };
+}
+
+/** Convert the outline to feet, relative to the garden's top-left corner. */
+export function outlineToFeet(detection: Detection, widthFt: number, lengthFt: number): Array<[number, number]> | null {
+  if (!detection.outline) return null;
+  const f = detection.frame;
+  const round = (n: number) => Math.round(n * 10) / 10;
+  return detection.outline.map((p) => [
+    round(Math.min(widthFt, Math.max(0, ((p.x - f.x) / f.w) * widthFt))),
+    round(Math.min(lengthFt, Math.max(0, ((p.y - f.y) / f.h) * lengthFt))),
+  ]);
+}
+
+/**
+ * Pixels per unit from dimensions written along the outline's edges.
+ * Hand-drawn plans are rarely exactly to scale, so take the median.
+ */
+export function scaleFromDimensions(detection: Detection, dims: Array<{ edge: string; value: number }>): number | null {
+  const ratios = dims
+    .map((d) => {
+      const edge = detection.edges.find((e) => e.label === d.edge);
+      return edge && d.value > 0 ? edge.length / d.value : null;
+    })
+    .filter((n): n is number => n !== null)
+    .sort((a, b) => a - b);
+  if (!ratios.length) return null;
+  return ratios[Math.floor(ratios.length / 2)];
+}
+
+function eraseSmallMarks(ink: Uint8Array, colorful: Uint8Array, W: number, H: number, max: number) {
+  const N = W * H;
+  const seen = new Uint8Array(N);
+  const queue = new Int32Array(N);
+  for (let start = 0; start < N; start++) {
+    if (seen[start] || !ink[start] || colorful[start]) continue;
+    let head = 0;
+    let tail = 0;
+    seen[start] = 1;
+    queue[tail++] = start;
+    let minX = W;
+    let maxX = 0;
+    let minY = H;
+    let maxY = 0;
+    while (head < tail) {
+      const i = queue[head++];
+      const x = i % W;
+      const y = (i - x) / W;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      // 8-connected, so the pieces of one letter stay together.
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          const yy = y + dy;
+          if ((dx || dy) && xx >= 0 && yy >= 0 && xx < W && yy < H) {
+            const j = yy * W + xx;
+            if (!seen[j] && ink[j] && !colorful[j]) {
+              seen[j] = 1;
+              queue[tail++] = j;
+            }
+          }
+        }
+      }
+    }
+    if (maxX - minX < max && maxY - minY < max) for (let k = 0; k < tail; k++) ink[queue[k]] = 0;
+  }
+}
+
+function componentAt(W: number, H: number, start: number, test: (i: number) => boolean): Region | null {
+  if (!test(start)) return null;
+  const N = W * H;
+  const seen = new Uint8Array(N);
+  const queue = new Int32Array(N);
+  const rowMin = new Int32Array(H).fill(-1);
+  const rowMax = new Int32Array(H).fill(-1);
+  const g: Region = { area: 0, minX: W, minY: H, maxX: 0, maxY: 0, rowMin, rowMax };
+  let head = 0;
+  let tail = 0;
+  seen[start] = 1;
+  queue[tail++] = start;
+  while (head < tail) {
+    const i = queue[head++];
+    const x = i % W;
+    const y = (i - x) / W;
+    g.area++;
+    if (x < g.minX) g.minX = x;
+    if (x > g.maxX) g.maxX = x;
+    if (y < g.minY) g.minY = y;
+    if (y > g.maxY) g.maxY = y;
+    if (rowMin[y] === -1 || x < rowMin[y]) rowMin[y] = x;
+    if (x > rowMax[y]) rowMax[y] = x;
+    const next = [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, y > 0 ? i - W : -1, y < H - 1 ? i + W : -1];
+    for (const j of next) {
+      if (j >= 0 && !seen[j] && test(j)) {
+        seen[j] = 1;
+        queue[tail++] = j;
+      }
+    }
+  }
+  return g;
+}
+
+/** Outline from each row's leftmost and rightmost pixel: exact for shapes without inward pockets from the side. */
+function spanPolygon(g: Region): Point[] {
+  const left: Point[] = [];
+  const right: Point[] = [];
+  for (let y = g.minY; y <= g.maxY; y++) {
+    if (g.rowMin[y] < 0) continue;
+    left.push({ x: g.rowMin[y], y });
+    right.push({ x: g.rowMax[y] + 1, y });
+  }
+  if (left.length) {
+    left.unshift({ x: left[0].x, y: g.minY });
+    right.unshift({ x: right[0].x, y: g.minY });
+    left.push({ x: left[left.length - 1].x, y: g.maxY + 1 });
+    right.push({ x: right[right.length - 1].x, y: g.maxY + 1 });
+  }
+  return [...left, ...right.reverse()];
+}
+
+/** Douglas-Peucker on a closed polygon. */
+function simplify(points: Point[], eps: number): Point[] {
+  if (points.length < 4) return points;
+  const dp = (pts: Point[]): Point[] => {
+    if (pts.length < 3) return pts;
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    let worst = 0;
+    let index = 0;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const d = Math.abs((b.x - a.x) * (a.y - pts[i].y) - (a.x - pts[i].x) * (b.y - a.y)) / len;
+      if (d > worst) {
+        worst = d;
+        index = i;
+      }
+    }
+    if (worst <= eps) return [a, b];
+    const left = dp(pts.slice(0, index + 1));
+    return [...left.slice(0, -1), ...dp(pts.slice(index))];
+  };
+  // Split at the point farthest from the first, so the closed ring simplifies evenly.
+  let far = 0;
+  let best = 0;
+  points.forEach((p, i) => {
+    const d = Math.hypot(p.x - points[0].x, p.y - points[0].y);
+    if (d > best) {
+      best = d;
+      far = i;
+    }
+  });
+  const first = dp(points.slice(0, far + 1));
+  const second = dp([...points.slice(far), points[0]]);
+  return [...first.slice(0, -1), ...second.slice(0, -1)];
+}
+
+function letteredEdges(poly: Point[]): Edge[] {
+  const all = poly.map((a, i) => {
+    const b = poly[(i + 1) % poly.length];
+    return { a, b, length: Math.hypot(b.x - a.x, b.y - a.y) };
+  });
+  const perimeter = all.reduce((sum, e) => sum + e.length, 0);
+  return all
+    .filter((e) => e.length >= perimeter * 0.05)
+    .map((e, i) => ({ ...e, label: String.fromCharCode(65 + (i % 26)) }));
+}
+
+/**
+ * A garden's edge line (often a curve) can run straight through a bed, cutting its inside into
+ * pieces. Put the pieces back together when they sit right next to each other, at least one
+ * is not a rectangle, and together they fill most of their combined box.
+ */
+function mergeCut(found: Region[], W: number, H: number, r: number): Region[] {
+  const items = found.map((g) => ({ g, rect: bbox(g), fill: g.area / ((g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)) }));
+  const gap = r * 2 + 4;
+  let merged = true;
+  while (merged) {
+    merged = false;
+    outer: for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const a = items[i];
+        const b = items[j];
+        if (a.fill > 0.8 && b.fill > 0.8) continue;
+        const ux = Math.min(a.rect.x, b.rect.x);
+        const uy = Math.min(a.rect.y, b.rect.y);
+        const ux2 = Math.max(a.rect.x + a.rect.w, b.rect.x + b.rect.w);
+        const uy2 = Math.max(a.rect.y + a.rect.h, b.rect.y + b.rect.h);
+        // Pieces of one cut box overlap each other's bounding boxes; two separate boxes side by side don't.
+        const ox = Math.min(a.rect.x + a.rect.w, b.rect.x + b.rect.w) - Math.max(a.rect.x, b.rect.x);
+        const oy = Math.min(a.rect.y + a.rect.h, b.rect.y + b.rect.h) - Math.max(a.rect.y, b.rect.y);
+        if (ox < gap || oy < gap) continue;
+        const unionArea = (ux2 - ux) * (uy2 - uy);
+        if ((a.g.area + b.g.area) / unionArea < 0.72) continue;
+        // Don't swallow the garden itself: only merge pieces of bed size.
+        if (unionArea > W * H * 0.12) continue;
+        const g: Region = {
+          area: a.g.area + b.g.area,
+          minX: Math.min(a.g.minX, b.g.minX),
+          minY: Math.min(a.g.minY, b.g.minY),
+          maxX: Math.max(a.g.maxX, b.g.maxX),
+          maxY: Math.max(a.g.maxY, b.g.maxY),
+          rowMin: new Int32Array(H).fill(-1),
+          rowMax: new Int32Array(H).fill(-1),
+        };
+        for (let y = g.minY; y <= g.maxY; y++) {
+          const mins = [a.g.rowMin[y], b.g.rowMin[y]].filter((v) => v >= 0);
+          const maxs = [a.g.rowMax[y], b.g.rowMax[y]].filter((v) => v >= 0);
+          if (mins.length) {
+            g.rowMin[y] = Math.min(...mins);
+            g.rowMax[y] = Math.max(...maxs);
+          }
+        }
+        const rect = bbox(g);
+        items.splice(j, 1);
+        items[i] = { g, rect, fill: g.area / (rect.w * rect.h) };
+        merged = true;
+        break outer;
+      }
+    }
+  }
+  return items.map((item) => item.g);
+}
+
+/**
+ * Shrink an image by averaging every source pixel into the target pixel it lands in.
+ * Browsers' own scaling can skip pixels, which breaks thin 1-pixel lines into dashes.
+ */
+export function boxDownscale(src: Raster, tw: number, th: number): Raster {
+  const { width: sw, height: sh, data } = src;
+  if (tw >= sw && th >= sh) return src;
+  const out = new Uint8ClampedArray(tw * th * 4);
+  const sums = new Float64Array(tw * 4);
+  const counts = new Float64Array(tw);
+  const xMap = new Int32Array(sw);
+  for (let x = 0; x < sw; x++) xMap[x] = Math.min(tw - 1, Math.floor((x * tw) / sw));
+  let ty = 0;
+  for (let y = 0; y <= sh; y++) {
+    const rowTarget = y < sh ? Math.min(th - 1, Math.floor((y * th) / sh)) : th;
+    if (rowTarget !== ty) {
+      for (let x = 0; x < tw; x++) {
+        const n = counts[x] || 1;
+        const o = (ty * tw + x) * 4;
+        for (let c = 0; c < 4; c++) out[o + c] = sums[x * 4 + c] / n;
+      }
+      sums.fill(0);
+      counts.fill(0);
+      ty = rowTarget;
+      if (ty >= th) break;
+    }
+    if (y === sh) break;
+    for (let x = 0; x < sw; x++) {
+      const i = (y * sw + x) * 4;
+      const t = xMap[x];
+      // Transparent pixels count as white paper.
+      const a = data[i + 3] / 255;
+      sums[t * 4] += data[i] * a + 255 * (1 - a);
+      sums[t * 4 + 1] += data[i + 1] * a + 255 * (1 - a);
+      sums[t * 4 + 2] += data[i + 2] * a + 255 * (1 - a);
+      sums[t * 4 + 3] += 255;
+      counts[t]++;
+    }
+  }
+  return { width: tw, height: th, data: out };
+}
+
+/**
+ * Pencil photos want strict settings and hairline diagrams want loose ones, so try a few and keep
+ * the one that finds the most beds (a garden edge counts a little too). Ties go to the stricter one.
+ */
+export function detectBest(img: Raster, tries = [0.5, 0.6, 0.7, 0.8]): { sensitivity: number; detection: Detection } {
+  let best: { sensitivity: number; detection: Detection; score: number } | null = null;
+  for (const sensitivity of tries) {
+    const detection = detectSketch(img, { sensitivity });
+    const score = new Set(detection.beds.map((b) => b.group)).size + (detection.outline ? 0.5 : 0);
+    if (!best || score > best.score) best = { sensitivity, detection, score };
+  }
+  return { sensitivity: best!.sensitivity, detection: best!.detection };
 }
 
 /** Turn a detection into bed rectangles in feet, rounded to half a foot. */

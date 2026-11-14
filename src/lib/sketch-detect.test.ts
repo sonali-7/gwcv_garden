@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { detectSketch, toFeet } from "./sketch-detect";
+import { boxDownscale, detectBest, detectSketch, scaleFromDimensions, toFeet } from "./sketch-detect";
 
 function canvas(w: number, h: number) {
   const data = new Uint8Array(w * h * 4).fill(255);
@@ -23,6 +23,14 @@ function canvas(w: number, h: number) {
     },
     box(x: number, y: number, bw: number, bh: number, t = 3) {
       this.outline([[x, y], [x + bw, y], [x + bw, y + bh], [x, y + bh]], t);
+    },
+    line(x0: number, y0: number, x1: number, y1: number, t = 2) {
+      const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      for (let k = 0; k <= n; k++) {
+        const x = Math.round(x0 + ((x1 - x0) * k) / n);
+        const y = Math.round(y0 + ((y1 - y0) * k) / n);
+        for (let dx = 0; dx < t; dx++) for (let dy = 0; dy < t; dy++) set(x + dx, y + dy, ink);
+      }
     },
     fill(x: number, y: number, bw: number, bh: number, rgb: [number, number, number]) {
       for (let yy = y; yy < y + bh; yy++) for (let xx = x; xx < x + bw; xx++) set(xx, yy, rgb);
@@ -71,6 +79,39 @@ describe("reading a garden drawing", () => {
     assert.ok(d.beds.every((b) => b.source === "fill" && b.color));
   });
 
+  it("traces an odd-shaped garden, mends a bed its edge cuts through, and reads the scale off a side", () => {
+    const c = canvas(500, 400);
+    // A garden with a slanted bottom-left edge.
+    c.line(40, 20, 460, 20);
+    c.line(460, 20, 460, 380);
+    c.line(460, 380, 200, 380);
+    c.line(200, 380, 40, 220);
+    c.line(40, 220, 40, 20);
+    c.box(70, 50, 150, 30, 2);
+    c.box(260, 50, 160, 30, 2);
+    c.box(90, 200, 140, 60, 2); // the slanted edge runs through this one's bottom-left corner
+    c.box(300, 300, 120, 40, 2);
+    const d = detectSketch(c.raster);
+    assert.equal(new Set(d.beds.map((b) => b.group)).size, 4);
+    assert.ok(d.outline && d.outline.length >= 5, "outline traced");
+    const cut = d.beds.find((b) => Math.abs(b.rect.x - 90) < 6 && Math.abs(b.rect.y - 200) < 6);
+    assert.ok(cut && Math.abs(cut.rect.w - 140) < 8 && Math.abs(cut.rect.h - 60) < 8, JSON.stringify(cut?.rect));
+    // The top side is 420 px; call it 21 m.
+    const top = d.edges.find((e) => Math.abs(e.a.y - e.b.y) < 3 && Math.min(e.a.y, e.b.y) < 30);
+    assert.ok(top);
+    const perUnit = scaleFromDimensions(d, [{ edge: top!.label, value: 21 }]);
+    assert.ok(perUnit && Math.abs(perUnit - 20) < 1, String(perUnit));
+  });
+
+  it("keeps thin lines when shrinking and picks a sensitivity that finds the beds", () => {
+    const c = canvas(1200, 900);
+    c.box(100, 100, 1000, 700, 1);
+    for (let i = 0; i < 6; i++) c.box(160, 160 + i * 100, 400, 40, 1);
+    const small = boxDownscale(c.raster, 480, 360);
+    const { detection } = detectBest(small);
+    assert.equal(new Set(detection.beds.map((b) => b.group)).size, 6);
+  });
+
   it("finds nothing on a blank page", () => {
     assert.equal(detectSketch(canvas(200, 200).raster).beds.length, 0);
   });
@@ -80,14 +121,20 @@ describe("reading labels from Claude's reply", async () => {
   const { parseLabels } = await import("./sketch-labels");
   it("keeps valid beds, maps crop names, and ignores junk", () => {
     const text = `Here you go:
-{"beds":[{"n":1,"name":"North border","crop":"Trees","skip":false},{"n":2,"name":"Carrots","crop":"carrot","skip":false},
-{"n":2,"name":"dupe"},{"n":9,"name":"out of range"},{"n":3,"name":null,"crop":"unicorn grass","skip":true}],"widthFt":"40","lengthFt":30}`;
-    const out = parseLabels(text, 3);
-    assert.deepEqual(out.beds.map((b) => [b.n, b.name, b.crop, b.skip]), [
-      [1, "North border", "trees", false],
-      [2, "Carrots", "carrots", false],
-      [3, null, null, true],
+{"beds":[{"n":1,"name":"North border","crops":["Trees"],"skip":false},{"n":2,"name":"Kale / Peas","crops":["kale","Peas","nothing"]},
+{"n":2,"name":"dupe"},{"n":9,"name":"out of range"},{"n":3,"name":null,"crops":["Bitter melons","luffa!"],"skip":true}],
+"missed":[{"name":"Flowers","crops":["marigold"],"box":[0.2,0.1,0.3,0.12]},{"name":"bad","box":[2,0,1,1]}],
+"dimensions":[{"edge":"a","value":9,"unit":"m"},{"edge":"Z","value":3,"unit":"m"},{"edge":"B","value":"x"}],
+"units":"m","widthFt":"40","lengthFt":30}`;
+    const out = parseLabels(text, 3, ["A", "B"]);
+    assert.deepEqual(out.beds.map((b) => [b.n, b.name, b.crops, b.skip]), [
+      [1, "North border", ["trees"], false],
+      [2, "Kale / Peas", ["kale", "peas"], false],
+      [3, null, ["bitter melon", "luffa"], true],
     ]);
+    assert.deepEqual(out.missed.map((m) => m.name), ["Flowers"]);
+    assert.deepEqual(out.dimensions, [{ edge: "A", value: 9, unit: "m" }]);
+    assert.equal(out.units, "m");
     assert.equal(out.widthFt, 40);
     assert.equal(out.lengthFt, 30);
   });

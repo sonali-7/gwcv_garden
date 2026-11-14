@@ -50,7 +50,7 @@ export async function loadGarden(store: Store, now = new Date()): Promise<Garden
     timezone: timeZone,
     layout,
     people: people.map(toPublicPerson),
-    beds,
+    beds: beds.filter((bed) => !bed.archived),
     plantings,
     sessions,
     photos,

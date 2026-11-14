@@ -6,6 +6,7 @@ import { spriteUrl } from "@/lib/pixel-sprites";
 import type { GardenData } from "@/lib/garden-data";
 import type { BedAdvice, Recommendation } from "@/lib/recommend";
 import type { Bed, Planting } from "@/lib/types";
+import { showArea, showSize } from "@/lib/units";
 
 function shortDate(day: string, withYear = false): string {
   return new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", {
@@ -96,6 +97,7 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
           const a = advice.get(bed.id);
           const now = a?.current[0];
           const next = a?.planned[0];
+          const others = (a?.current ?? []).slice(1).map((p) => p.crop);
           return (
             <li key={bed.id}>
               <button type="button" onClick={() => props.onSelect(bed.id)}>
@@ -107,7 +109,11 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
                 <span>
                   <strong>{bed.name}</strong>
                   <small>
-                    {now ? statusLine(now, data.today) : next ? `${title(next.crop)} planned for ${shortDate(next.planted_date)}` : "Open"}
+                    {now
+                      ? statusLine(now, data.today) + (others.length ? ` · also ${others.join(", ")}` : "")
+                      : next
+                        ? `${title(next.crop)} planned for ${shortDate(next.planted_date)}`
+                        : "Open"}
                   </small>
                 </span>
               </button>
@@ -166,7 +172,9 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
       ) : (
         <h2>{bed.name}</h2>
       )}
-      <p className="sub">{g ? `${g.w} × ${g.h} ft · ${g.w * g.h} sq ft` : "Not on the map yet"}</p>
+      <p className="sub">
+        {g ? `${showSize(g.w, g.h, data.layout.units ?? "ft")} · ${showArea(g.w, g.h, data.layout.units ?? "ft")}` : "Not on the map yet"}
+      </p>
 
       {tasks.length ? (
         <ul className="bed-tasks">
