@@ -1213,7 +1213,8 @@ h1 {
 .map-surface.shaped { border: 0; box-shadow: none; overflow: visible; }
 /* Dragging beds needs every touch; otherwise let fingers scroll a zoomed map. */
 .map-surface.editing { touch-action: none; }
-.map-viewport { position: relative; }
+.map-viewport { position: relative; container-type: inline-size; }
+.map-stage { position: relative; height: 100%; max-width: 100%; margin: 0 auto; }
 .map-viewport.zoomed {
   overflow: auto;
   max-height: 78vh;

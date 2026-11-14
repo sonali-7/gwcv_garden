@@ -13,7 +13,7 @@ type Drag = { id: string; mode: "move" | "resize"; startX: number; startY: numbe
 export const CROP_MIME = "application/x-garden-crop";
 
 /** Page height taken by the header, timeline, map toolbar, and footer, so the garden at Fit fits in the rest. */
-const SPACE_ABOVE_AND_BELOW = 350;
+const SPACE_ABOVE_AND_BELOW = 80;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
@@ -207,11 +207,13 @@ export function GardenMap(props: {
   const margin = Math.max(2, 0.1 * Math.max(layout.widthFt, layout.lengthFt));
   const frameW = layout.widthFt + margin * 2;
   const frameH = layout.lengthFt + margin * 2;
+  const ratio = (frameW / frameH).toFixed(4);
+  // The grass fills the card's width. Its height fits the whole garden on screen: what the card's width
+  // would need, but no more than the window has room for below the header and timeline (and never tiny).
+  // 100cqw is the card's width (.map-viewport is a size container). Zooming grows both.
   const frameStyle: CSSProperties = {
-    aspectRatio: `${frameW} / ${frameH}`,
-    // At Fit the whole garden fits on screen: as wide as the card, but no taller than the window has room for
-    // below the header and timeline (and never tiny). Zooming grows it from there.
-    width: `calc(${zoom} * min(100%, max(320px, (100vh - ${SPACE_ABOVE_AND_BELOW}px) * ${(frameW / frameH).toFixed(4)})))`,
+    width: `${zoom * 100}%`,
+    height: `calc(${zoom} * min(100cqw / ${ratio}, max(${Math.round(320 / Number(ratio))}px, 100vh - ${SPACE_ABOVE_AND_BELOW}px)))`,
     backgroundImage: TILES.grass,
     backgroundSize: "24px 24px",
   };
@@ -308,6 +310,14 @@ export function GardenMap(props: {
       <div
         className="map-frame"
         style={frameStyle}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) props.onSelect(null);
+        }}
+      >
+      {/* The garden and its grass border, centred; any extra width is more grass. */}
+      <div
+        className="map-stage"
+        style={{ aspectRatio: `${frameW} / ${frameH}` }}
         onClick={(event) => {
           if (event.target === event.currentTarget) props.onSelect(null);
         }}
@@ -466,6 +476,7 @@ export function GardenMap(props: {
             </div>
           );
         })}
+      </div>
       </div>
       </div>
       </div>
