@@ -119,6 +119,8 @@ export type SessionDraft = {
   durationMin: number | null;
   onDate: string | null;
   place: string | null;
+  /** Every bed/row named in one text (Plot 8 and Plot 9). */
+  places?: string[];
   sourceText: string;
 };
 
@@ -138,9 +140,26 @@ export type Pending =
     }
   | { kind: "row"; draft: SessionDraft; image: HeldImage | null; tries: number; choices: string[] };
 
+/** Short rolling context so follow-ups like "also … at the same time" can reuse the last log. */
+export type TextMemory = {
+  at: string;
+  activity: ActivityType;
+  bedNames: string[];
+  summary: string;
+  start: { h: number; m: number } | null;
+  end: { h: number; m: number } | null;
+  startAmpm: "am" | "pm" | null;
+  endAmpm: "am" | "pm" | null;
+  durationMin: number | null;
+  dayOffset: number | null;
+};
+
 export type Conversation = {
   pending: Pending | null;
   lastSessionId: string | null;
+  /** Whole batch from the last multi-day / standing log (undo removes all of these). */
+  lastSessionIds?: string[];
+  memory?: TextMemory | null;
   photon: { spaceId: string; agentId: string } | null;
   sentToday: { day: string; count: number } | null;
 };
@@ -189,6 +208,8 @@ export function blankConversation(): Conversation {
   return {
     pending: null,
     lastSessionId: null,
+    lastSessionIds: [],
+    memory: null,
     photon: null,
     sentToday: null,
   };

@@ -5,7 +5,6 @@ import {
   DAY_END,
   DAY_START,
   HOUR_PX,
-  VIEW_HOURS,
   VIEW_START,
   dayNumber,
   hourLabel,
@@ -66,7 +65,6 @@ export function CalendarView({
   const placed = placeSlices(visible.flatMap((session) => slicesForSession(session, weekStart, timezone)));
   const hours = Array.from({ length: DAY_END - DAY_START }, (_, index) => DAY_START + index);
   const gridHeight = (DAY_END - DAY_START) * HOUR_PX;
-  const viewHeight = VIEW_HOURS * HOUR_PX;
   const now = new Date(clock);
   const nowParts = partsInZone(now, timezone);
   const nowDay = ymd(nowParts);
@@ -126,7 +124,7 @@ export function CalendarView({
           <span><i className="key planned" />Planned</span>
         </span>
       </div>
-      <div className="cal-scroll" ref={scrollRef} style={{ height: viewHeight }}>
+      <div className="cal-scroll" ref={scrollRef}>
         <div className="cal-grid" style={{ ["--hour" as string]: `${HOUR_PX}px` }}>
           <div className="gutter-head" />
           {days.map((day) => (
