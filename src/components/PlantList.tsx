@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CROP_MIME } from "@/components/GardenMap";
-import { cropColor } from "@/lib/crop-colors";
+import { spriteUrl } from "@/lib/pixel-sprites";
 import type { GardenData } from "@/lib/garden-data";
 import type { BedAdvice, Recommendation } from "@/lib/recommend";
 import type { Bed, Planting } from "@/lib/types";
@@ -18,6 +18,11 @@ function shortDate(day: string, withYear = false): string {
 
 function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 86_400_000);
+}
+
+function Sprite({ crop, sprites, size = 22, ghost = false }: { crop: string | null; sprites: Record<string, string>; size?: number; ghost?: boolean }) {
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img className={ghost ? "sprite ghost" : "sprite"} src={spriteUrl(crop, sprites)} alt="" width={size} height={size} />;
 }
 
 function title(text: string): string {
@@ -94,7 +99,11 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
           return (
             <li key={bed.id}>
               <button type="button" onClick={() => props.onSelect(bed.id)}>
-                <i style={{ background: now ? cropColor(now.crop) : "transparent" }} className={now ? "" : "hollow"} />
+                {now || next ? (
+                  <Sprite crop={(now ?? next)!.crop} sprites={data.sprites} ghost={!now} />
+                ) : (
+                  <i className="hollow" />
+                )}
                 <span>
                   <strong>{bed.name}</strong>
                   <small>
@@ -175,7 +184,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
         {a.current.length ? (
           a.current.map((planting) => (
             <div key={planting.id} className="growing">
-              <i style={{ background: cropColor(planting.crop) }} />
+              <Sprite crop={planting.crop} sprites={data.sprites} size={28} />
               <div>
                 <strong>{title(planting.crop)}</strong>
                 <small>
@@ -199,7 +208,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
           <h3>Planned</h3>
           {a.planned.map((planting) => (
           <div key={planting.id} className="growing planned">
-            <i style={{ borderColor: cropColor(planting.crop) }} />
+            <Sprite crop={planting.crop} sprites={data.sprites} size={28} ghost />
             <div>
               <strong>{title(planting.crop)}</strong>
               <small>Planned for {shortDate(planting.planted_date, true)}</small>
@@ -236,7 +245,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
               }}
             >
               <header>
-                <span className="rec-swatch" style={{ background: cropColor(rec.crop) }} aria-hidden="true" />
+                <Sprite crop={rec.crop} sprites={data.sprites} size={30} />
                 <strong>{title(rec.crop)}</strong>
                 <span className={rec.now ? "chip now" : "chip"}>{rec.now ? "Plant now" : `From ${shortDate(rec.plantOn)}`}</span>
               </header>

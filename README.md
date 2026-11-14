@@ -99,7 +99,8 @@ The garden map, plant recommendations, and the weekly planner that assigns volun
 
 Open [/garden](http://localhost:3000/garden), or use the Garden / Calendar tabs.
 
-- Beds are drawn to scale in feet over a 5 ft grid. Colors follow crop family (sweet potato red, cabbage purple, carrots blue, trees green). Dashed beds are open or only planned. A red triangle or orange square on a bed mirrors the priority list.
+- The map is pixel art: grass, wooden raised beds, and soil, drawn to scale in feet over a 5 ft grid. Each bed is filled with small drawings of its crop, about one per 2.5 ft. Planned crops show faded, and open beds show bare soil. A water drop or harvest basket on a bed mirrors the priority list.
+- Crop drawings are 16×16 sprites in `src/lib/pixel-sprites.ts`. To use your own art, drop a PNG into `public/sprites/` named after the crop (`carrots.png`, `sweet-potato.png`) or a sprite group (`leafy.png`, `pod.png`). It replaces the built-in drawing everywhere. See `public/sprites/README.md`.
 - Click a bed to see what's growing, when it was last watered and by whom, past seasons, recent work, and photos from texts.
 - **Suggestions** come from fixed rules in `src/lib/recommend.ts` (no LLM). The rules are: don't repeat a family grown in this bed this season or last, follow a heavy feeder with a nitrogen fixer, and prefer crops whose sowing window is open once the bed is free. Sowing months, water, sun, and soil live in `src/data/crop-guide.json` and are set for a zone 6b/7a garden. Edit them for yours.
 - **Add to plan** (or drag a suggestion card onto any bed) creates a planned planting dated to its sowing window. When someone later texts `planted garlic in space x`, the plan becomes the real planting. A bed with something planned drops off the "Fill" priority.

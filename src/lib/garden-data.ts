@@ -1,3 +1,6 @@
+import { readdir } from "node:fs/promises";
+import path from "node:path";
+import { spriteFileKey } from "./pixel-sprites";
 import { buildTasks } from "./priority";
 import type { Store } from "./store";
 import { gardenTz, todayYmd } from "./time";
@@ -13,11 +16,28 @@ export type GardenData = {
   sessions: WorkSession[];
   photos: Photo[];
   tasks: Task[];
+  /** Drawings dropped into public/sprites, keyed by crop or sprite name. */
+  sprites: Record<string, string>;
 };
+
+async function customSprites(): Promise<Record<string, string>> {
+  try {
+    const files = await readdir(path.join(process.cwd(), "public", "sprites"));
+    const out: Record<string, string> = {};
+    for (const file of files) {
+      if (!/\.(png|gif|webp|svg)$/i.test(file)) continue;
+      out[spriteFileKey(file)] = `/sprites/${encodeURIComponent(file)}`;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 export async function loadGarden(store: Store, now = new Date()): Promise<GardenData> {
   const timeZone = gardenTz();
-  const [layout, people, beds, plantings, sessions, photos] = await Promise.all([
+  const [sprites, layout, people, beds, plantings, sessions, photos] = await Promise.all([
+    customSprites(),
     store.getLayout(),
     store.listPeople(),
     store.listBeds(),
@@ -35,5 +55,6 @@ export async function loadGarden(store: Store, now = new Date()): Promise<Garden
     sessions,
     photos,
     tasks: buildTasks({ now, beds, plantings, sessions, timeZone }),
+    sprites,
   };
 }

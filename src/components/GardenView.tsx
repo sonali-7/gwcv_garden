@@ -126,6 +126,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
           plantings={data.plantings}
           tasks={data.tasks}
           today={data.today}
+          sprites={data.sprites}
           selectedId={selectedId}
           editing={editing}
           busy={busy}

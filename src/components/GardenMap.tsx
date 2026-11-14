@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { cropColor } from "@/lib/crop-colors";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { spriteDataUrl, spriteUrl, TILES } from "@/lib/pixel-sprites";
 import { isActive } from "@/lib/plantings";
 import type { Bed, GardenLayout, Planting, Task } from "@/lib/types";
 
@@ -28,6 +28,7 @@ export function GardenMap(props: {
   plantings: Planting[];
   tasks: Task[];
   today: string;
+  sprites: Record<string, string>;
   selectedId: string | null;
   editing: boolean;
   busy: boolean;
@@ -43,12 +44,26 @@ export function GardenMap(props: {
   const [drag, setDrag] = useState<Drag | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
   const [showPhoto, setShowPhoto] = useState(true);
+  const [pxPerFt, setPxPerFt] = useState(20);
+
+  useEffect(() => {
+    const el = surface.current;
+    if (!el) return;
+    const measure = () => setPxPerFt(el.getBoundingClientRect().width / layout.widthFt);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [layout.widthFt]);
+
+  // About one plant drawing per 2.5 ft, kept between 18 and 44 px so it stays readable.
+  const spritePx = Math.round(Math.min(44, Math.max(18, pxPerFt * 2.5)) / 2) * 2;
 
   const beds = placed(props.beds, layout);
   const legend = new Map<string, string>();
   for (const bed of beds) {
     const crop = props.plantings.find((p) => p.bed_id === bed.id && isActive(p, props.today))?.crop;
-    if (crop && !legend.has(crop)) legend.set(crop, cropColor(crop));
+    if (crop && !legend.has(crop)) legend.set(crop, spriteUrl(crop, props.sprites));
   }
 
   function feetPerPixel() {
@@ -118,16 +133,18 @@ export function GardenMap(props: {
   const gridY = (5 / layout.lengthFt) * 100;
   const surfaceStyle: CSSProperties = {
     aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`,
-    backgroundSize: `${gridX}% ${gridY}%`,
+    backgroundImage: `linear-gradient(to right, rgba(43, 29, 20, 0.12) 2px, transparent 2px), linear-gradient(to bottom, rgba(43, 29, 20, 0.12) 2px, transparent 2px), ${TILES.grass}`,
+    backgroundSize: `${gridX}% ${gridY}%, ${gridX}% ${gridY}%, 24px 24px`,
   };
 
   return (
     <section className="map-card" aria-label="Garden map">
       <div className="map-head">
         <div className="map-legend" aria-label="Legend">
-          {[...legend.entries()].map(([crop, color]) => (
+          {[...legend.entries()].map(([crop, url]) => (
             <span key={crop}>
-              <i style={{ background: color }} />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img className="sprite" src={url} alt="" width={20} height={20} />
               {crop}
             </span>
           ))}
@@ -199,7 +216,7 @@ export function GardenMap(props: {
             .filter((p) => p.bed_id === bed.id && p.planted_date > props.today && !p.removed_date)
             .sort((a, b) => a.planted_date.localeCompare(b.planted_date));
           const crop = current[0]?.crop ?? null;
-          const color = crop ? cropColor(crop) : planned[0] ? cropColor(planned[0].crop) : "#9a8d7a";
+          const shown = crop ?? planned[0]?.crop ?? null;
           const tasks = props.tasks.filter((task) => task.bed_id === bed.id);
           const urgent = tasks.find((task) => task.severity === "urgent");
           const upcoming = tasks.find((task) => task.severity === "upcoming");
@@ -219,7 +236,7 @@ export function GardenMap(props: {
                   top: `${(g.y / layout.lengthFt) * 100}%`,
                   width: `${(g.w / layout.widthFt) * 100}%`,
                   height: `${(g.h / layout.lengthFt) * 100}%`,
-                  "--bed": color,
+                  backgroundImage: TILES.soil,
                 } as CSSProperties
               }
               onClick={(event) => {
@@ -249,6 +266,16 @@ export function GardenMap(props: {
                 }
               }}
             >
+              {shown ? (
+                <span
+                  className="bed-crops"
+                  aria-hidden="true"
+                  style={{
+                    backgroundImage: `url("${spriteUrl(shown, props.sprites)}")`,
+                    backgroundSize: `${spritePx}px ${spritePx}px`,
+                  }}
+                />
+              ) : null}
               <span className="bed-label">
                 <strong>{bed.name}</strong>
                 {tall || g.w / layout.widthFt > 0.3 ? (
@@ -256,8 +283,14 @@ export function GardenMap(props: {
                 ) : null}
               </span>
               <span className="bed-flags">
-                {urgent ? <i className="flag urgent" title={urgent.title} /> : null}
-                {upcoming ? <i className="flag upcoming" title={upcoming.title} /> : null}
+                {urgent ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img className="sprite flag" src={spriteDataUrl(urgent.type === "water" ? "drop" : "sprout")} alt={urgent.title} title={urgent.title} />
+                ) : null}
+                {upcoming ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img className="sprite flag" src={spriteDataUrl("basket")} alt={upcoming.title} title={upcoming.title} />
+                ) : null}
               </span>
               {editing ? (
                 <>
