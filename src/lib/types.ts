@@ -112,6 +112,8 @@ export type SessionDraft = {
   startAmpm: "am" | "pm" | null;
   endAmpm: "am" | "pm" | null;
   durationMin: number | null;
+  onDate: string | null;
+  place: string | null;
   sourceText: string;
 };
 
@@ -124,7 +126,7 @@ export type Pending =
   | { kind: "name"; resumeText: string; image: HeldImage | null }
   | {
       kind: "time";
-      field: "start" | "ampm" | "end";
+      field: "start" | "ampm" | "end" | "day";
       draft: SessionDraft;
       image: HeldImage | null;
       tries: number;

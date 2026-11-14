@@ -28,6 +28,32 @@ export function workPhrase(
   }
 }
 
+export function planPhrase(
+  activity: ActivityType,
+  crop: string | null,
+  bedName: string | null,
+): string {
+  const bed = bedName ? bedName.toLowerCase() : null;
+  switch (activity) {
+    case "plant":
+      return `plant ${crop ?? "crops"}${bed ? ` on the ${bed}` : ""}`;
+    case "weed":
+      if (bed) return `weed the ${bed}`;
+      return crop ? `weed ${crop}` : "weed";
+    case "water":
+      if (bed) return `water the ${bed}`;
+      return crop ? `water ${crop}` : "water";
+    case "harvest":
+      return `harvest ${crop ?? "crops"}${bed ? ` from the ${bed}` : ""}`;
+    case "prep":
+      return bed ? `prep the ${bed}` : "prep a bed";
+    case "meeting":
+      return "weekly meeting";
+    default:
+      return crop ? `work on ${crop}` : "garden work";
+  }
+}
+
 export function eventSubtitle(activity: ActivityType, crop: string | null): string {
   switch (activity) {
     case "weed":

@@ -1,7 +1,7 @@
 import { getStore } from "@/lib/db";
 import { handleIncoming } from "@/lib/handle-message";
 import { json } from "@/lib/http";
-import { PHOTON_DAILY_LIMIT, sendPhotonText } from "@/lib/photon";
+import { photonDailyLimit, photonReply, sendPhotonText } from "@/lib/photon";
 import { todayYmd } from "@/lib/time";
 import { readPhotonInbound, verifyStandardWebhook } from "@/lib/webhook";
 
@@ -39,23 +39,20 @@ export async function POST(request: Request) {
   const before = await store.getConversation(inbound.phone);
   let count = before.sentToday?.day === today ? before.sentToday.count : 0;
 
-  if (apiKey && projectId) {
-    for (const [index, reply] of result.replies.entries()) {
-      if (count >= PHOTON_DAILY_LIMIT) break;
-      try {
-        await sendPhotonText({
-          apiKey,
-          projectId,
-          spaceId: inbound.spaceId,
-          senderId: inbound.agentId,
-          text: reply,
-          idempotencyKey: `${inbound.eventId}:${index}`,
-        });
-        count += 1;
-      } catch (error) {
-        console.warn(error instanceof Error ? error.message : "Photon send failed");
-        break;
-      }
+  const reply = photonReply(result.replies, count, photonDailyLimit());
+  if (apiKey && projectId && reply) {
+    try {
+      await sendPhotonText({
+        apiKey,
+        projectId,
+        spaceId: inbound.spaceId,
+        senderId: inbound.agentId,
+        text: reply,
+        idempotencyKey: inbound.eventId,
+      });
+      count += 1;
+    } catch (error) {
+      console.warn(error instanceof Error ? error.message : "Photon send failed");
     }
   }
 

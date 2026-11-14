@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { slicesForSession } from "./calendar";
+import { placeSlices, sessionStatus, slicesForSession } from "./calendar";
 import { loadDashboard } from "./dashboard-data";
 import { handleIncoming } from "./handle-message";
 import { createMemoryStore } from "./memory-store";
-import { parseMessage, timeGaps } from "./parse";
+import { mergeDrafts, messageFromTool } from "./agent";
+import { calendarDate, needsDay, parseMessage, timeGaps } from "./parse";
 import { buildTasks } from "./priority";
 import { buildSeed } from "./seed";
 import { DEFAULT_TZ, startOfWeekYmd, zonedToUtc } from "./time";
+import { LIMIT_NOTICE, photonReply } from "./photon";
 import { readPhotonInbound, verifyStandardWebhook } from "./webhook";
 import { createHmac } from "node:crypto";
 
@@ -43,9 +45,86 @@ describe("parser", () => {
 
   it("recognizes questions, undo, and emergencies", () => {
     assert.equal(parseMessage("what's on the schedule this week?").kind, "query_schedule");
+    assert.equal(parseMessage("what's the schedule?").kind, "query_schedule");
     assert.equal(parseMessage("what needs watering?").kind, "query_watering");
     assert.equal(parseMessage("undo").kind, "undo");
     assert.equal(parseMessage("I hurt my hand").kind, "emergency");
+  });
+
+  it("treats schedule-a-crop as a planting, not a week readout", () => {
+    const parsed = parseMessage("schedule kumquats from 4-5 today");
+    assert.equal(parsed.kind, "session");
+    if (parsed.kind !== "session") return;
+    assert.equal(parsed.draft.activity, "plant");
+    assert.equal(parsed.draft.crop, "kumquats");
+    assert.equal(parsed.draft.dayOffset, 0);
+    assert.deepEqual(parsed.draft.start, { h: 4, m: 0 });
+    assert.deepEqual(parsed.draft.end, { h: 5, m: 0 });
+    assert.deepEqual(timeGaps(parsed.draft), ["ampm"]);
+  });
+
+  it("asks which day for a meeting at 10am instead of an end time", () => {
+    const parsed = parseMessage("schedule a weekly meeting at 10 am");
+    assert.equal(parsed.kind, "session");
+    if (parsed.kind !== "session") return;
+    assert.equal(parsed.draft.activity, "meeting");
+    assert.equal(parsed.draft.startAmpm, "am");
+    assert.equal(parsed.draft.durationMin, 60);
+    assert.deepEqual(timeGaps(parsed.draft), []);
+    assert.equal(needsDay(parsed.draft), true);
+    assert.equal(calendarDate("the 19th of november", "2026-11-14"), "2026-11-19");
+    assert.equal(calendarDate("11/19", "2026-11-14"), "2026-11-19");
+    assert.equal(calendarDate("November 19", "2026-11-14"), "2026-11-19");
+  });
+
+  it("keeps written times and drops a day the model made up", () => {
+    const text = "schedule kumquats from 4-5 today";
+    const model = messageFromTool(text, {
+      kind: "session",
+      activity: "plant",
+      crop: "Kumquats",
+      day_offset: 0,
+      weekday: 5,
+      start_hour: 4,
+    });
+    const rules = parseMessage(text);
+    assert.equal(model?.kind, "session");
+    assert.equal(rules.kind, "session");
+    if (model?.kind !== "session" || rules.kind !== "session") return;
+    const merged = mergeDrafts(model.draft, rules.draft, true);
+    assert.deepEqual(merged.end, { h: 5, m: 0 });
+    assert.equal(merged.weekday, null);
+    assert.equal(merged.dayOffset, 0);
+    assert.equal(merged.crop, "kumquats");
+
+    const meeting = messageFromTool("schedule a weekly meeting", {
+      kind: "session",
+      activity: "meeting",
+      weekday: 6,
+      start_hour: 10,
+      start_ampm: "am",
+    });
+    if (meeting?.kind !== "session") return assert.fail("expected a session");
+    const noDay = mergeDrafts(meeting.draft, null, false);
+    assert.equal(noDay.weekday, null);
+    assert.equal(needsDay(noDay), true);
+  });
+
+  it("maps an agent tool call into the same session draft", () => {
+    const parsed = messageFromTool("schedule kumquats from 4-5 today", {
+      kind: "session",
+      activity: "plant",
+      crop: "kumquats",
+      day_offset: 0,
+      start_hour: 4,
+      start_minute: 0,
+      end_hour: 5,
+      end_minute: 0,
+    });
+    assert.equal(parsed?.kind, "session");
+    if (parsed?.kind !== "session") return;
+    assert.equal(parsed.draft.crop, "kumquats");
+    assert.deepEqual(timeGaps(parsed.draft), ["ampm"]);
   });
 });
 
@@ -66,6 +145,57 @@ describe("priority tasks", () => {
     assert.equal(tasks[0].severity, "urgent");
     assert.equal(tasks[1].severity, "upcoming");
     assert.equal(tasks[2].bed_id, "bed-x");
+  });
+});
+
+describe("photon replies", () => {
+  it("sends one text per incoming message and warns on the last one", () => {
+    const lines = ["Thanks, Priya. I'll remember you.", "What time did you start?"];
+    assert.equal(photonReply(lines, 0, 100), lines.join("\n"));
+    assert.equal(photonReply(lines, 99, 100), `${lines.join("\n")}\n\n${LIMIT_NOTICE}`);
+    assert.equal(photonReply(lines, 100, 100), null);
+    assert.equal(photonReply([], 0, 100), null);
+  });
+});
+
+describe("session status", () => {
+  it("splits done, happening now, and planned at the current minute", () => {
+    const at = (start: string, end: string) => sessionStatus({ start, end }, NOW);
+    assert.equal(at("2026-11-14T13:00:00.000Z", "2026-11-14T14:00:00.000Z"), "done");
+    assert.equal(at("2026-11-14T14:30:00.000Z", "2026-11-14T15:30:00.000Z"), "now");
+    assert.equal(at("2026-11-14T15:00:00.000Z", "2026-11-14T16:00:00.000Z"), "now");
+    assert.equal(at("2026-11-14T16:00:00.000Z", "2026-11-14T17:00:00.000Z"), "planned");
+    assert.equal(at("2026-11-14T14:00:00.000Z", "2026-11-14T15:00:00.000Z"), "done");
+  });
+});
+
+describe("calendar lanes", () => {
+  const slice = (sessionId: string, startMin: number, endMin: number) => ({
+    sessionId,
+    day: "2026-11-14",
+    topPx: 0,
+    heightPx: 0,
+    startMin,
+    endMin,
+  });
+  const byId = (placed: ReturnType<typeof placeSlices>) =>
+    Object.fromEntries(placed.map((item) => [item.sessionId, { lane: item.lane, lanes: item.lanes }]));
+
+  it("only splits blocks that overlap, not the whole day", () => {
+    const placed = byId(placeSlices([slice("hi", 120, 240), slice("emma-a", 480, 540), slice("emma-b", 480, 540)]));
+    assert.deepEqual(placed.hi, { lane: 0, lanes: 1 });
+    assert.deepEqual(placed["emma-a"].lanes, 2);
+    assert.deepEqual(placed["emma-b"].lanes, 2);
+    assert.notEqual(placed["emma-a"].lane, placed["emma-b"].lane);
+  });
+
+  it("keeps a chain of overlaps in one group, and back-to-back blocks full width", () => {
+    const placed = byId(placeSlices([slice("a", 0, 120), slice("b", 60, 180), slice("c", 150, 240), slice("d", 240, 300)]));
+    assert.equal(placed.a.lanes, 2);
+    assert.equal(placed.b.lanes, 2);
+    assert.equal(placed.c.lanes, 2);
+    assert.equal(placed.c.lane, 0);
+    assert.deepEqual(placed.d, { lane: 0, lanes: 1 });
   });
 });
 
@@ -174,6 +304,31 @@ describe("text log", () => {
       now: NOW,
     });
     assert.match(water.replies[0], /Sweet potato needs watering/);
+
+    const scheduled = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "schedule kumquats from 4-5 today",
+      now: NOW,
+    });
+    assert.equal(scheduled.session, null);
+    assert.match(scheduled.replies[0], /4–5am or 4–5pm/);
+
+    const meeting = await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "schedule a weekly meeting at 10 am",
+      now: NOW,
+    });
+    assert.equal(meeting.session, null);
+    assert.match(meeting.replies[0], /Which day/);
+    const placed = await handleIncoming(store, {
+      phone: "+15555501003",
+      text: "the 19th of november",
+      now: NOW,
+    });
+    assert.equal(placed.session?.activity_type, "meeting");
+    assert.equal(placed.session?.start, "2026-11-19T15:00:00.000Z");
+    assert.equal(placed.session?.end, "2026-11-19T16:00:00.000Z");
+    assert.deepEqual(placed.replies, ["Scheduled: Jeremy, Thu 11/19, 10am–11am, weekly meeting."]);
   });
 
   it("does not log an emergency", async () => {

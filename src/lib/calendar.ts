@@ -56,8 +56,17 @@ export function placeSlices(slices: DaySlice[]): PlacedSlice[] {
   const placed: PlacedSlice[] = [];
   for (const list of byDay.values()) {
     const sorted = [...list].sort((a, b) => a.startMin - b.startMin || b.endMin - a.endMin);
-    const laneEnds: number[] = [];
-    const draft = sorted.map((slice) => {
+    let group: Array<DaySlice & { lane: number }> = [];
+    let laneEnds: number[] = [];
+    let groupEnd = -1;
+    const flush = () => {
+      const lanes = Math.max(1, laneEnds.length);
+      for (const slice of group) placed.push({ ...slice, lanes });
+      group = [];
+      laneEnds = [];
+    };
+    for (const slice of sorted) {
+      if (group.length > 0 && slice.startMin >= groupEnd) flush();
       let lane = laneEnds.findIndex((end) => end <= slice.startMin);
       if (lane === -1) {
         lane = laneEnds.length;
@@ -65,10 +74,10 @@ export function placeSlices(slices: DaySlice[]): PlacedSlice[] {
       } else {
         laneEnds[lane] = slice.endMin;
       }
-      return { ...slice, lane };
-    });
-    const lanes = Math.max(1, laneEnds.length);
-    for (const slice of draft) placed.push({ ...slice, lanes });
+      group.push({ ...slice, lane });
+      groupEnd = group.length === 1 ? slice.endMin : Math.max(groupEnd, slice.endMin);
+    }
+    if (group.length > 0) flush();
   }
   return placed;
 }
@@ -85,6 +94,21 @@ export function outsideDayGrid(session: WorkSession, weekStart: string, timeZone
   if (!sessionTouchesWeek(session, weekStart, timeZone)) return false;
   return slicesForSession(session, weekStart, timeZone).length === 0;
 }
+
+export type SessionStatus = "done" | "now" | "planned";
+
+export function sessionStatus(session: Pick<WorkSession, "start" | "end">, now: Date): SessionStatus {
+  const time = now.getTime();
+  if (new Date(session.end).getTime() <= time) return "done";
+  if (new Date(session.start).getTime() <= time) return "now";
+  return "planned";
+}
+
+export const STATUS_LABEL: Record<SessionStatus, string> = {
+  done: "Done",
+  now: "Happening now",
+  planned: "Planned",
+};
 
 export function hourLabel(hour: number): string {
   if (hour === 0 || hour === 24) return "12";

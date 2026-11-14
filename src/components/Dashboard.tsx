@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CalendarView } from "@/components/CalendarView";
-import { DetailCard } from "@/components/DetailCard";
 import { Phone } from "@/components/Phone";
 import { PriorityPanel } from "@/components/PriorityPanel";
 import { ViewTabs } from "@/components/ViewTabs";
@@ -12,7 +11,7 @@ import type { DashboardData } from "@/lib/types";
 export function Dashboard({ initial }: { initial: DashboardData }) {
   const [data, setData] = useState(initial);
   const [week, setWeek] = useState(initial.weekStart);
-  const [selectedId, setSelectedId] = useState<string | null>("session-jeremy-weed");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -56,7 +55,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
     try {
       await fetch("/api/reset", { method: "POST" });
       await reload(initial.weekStart);
-      setSelectedId("session-jeremy-weed");
+      setSelectedId(null);
       setTaskId(null);
     } catch {
       setError("Reset didn't finish.");
@@ -125,21 +124,14 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
             people={data.people}
             sessions={data.sessions}
             plantings={data.plantings}
+            beds={data.beds}
+            photos={data.photos}
             selectedId={selectedId}
             highlightBedId={highlightBedId}
             onSelect={(id) => {
               setSelectedId(id);
-              setTaskId(null);
+              if (id) setTaskId(null);
             }}
-          />
-          <DetailCard
-            session={selected}
-            task={task}
-            people={data.people}
-            beds={data.beds}
-            plantings={data.plantings}
-            photos={data.photos}
-            timezone={data.timezone}
           />
         </section>
         <PriorityPanel
