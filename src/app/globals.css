@@ -1195,6 +1195,7 @@ h1 {
 .map-frame {
   position: relative;
   width: 100%;
+  margin: 0 auto;
   border: 4px solid var(--ink-line);
   overflow: hidden;
   background-color: #9cc463;
