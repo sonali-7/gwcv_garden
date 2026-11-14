@@ -54,6 +54,10 @@ export function PlantList(props: {
   onSelect: (id: string | null) => void;
   onPlan: (bedId: string, crop: string, how?: "after" | "alongside" | "replace") => void;
   onRename: (bed: Bed, name: string) => void;
+  /** The plot whose name is being edited (double-click its name here or on the map), if any. */
+  renamingId: string | null;
+  onStartRename: (id: string) => void;
+  onStopRename: () => void;
   onDeleteBed: (bed: Bed) => void;
   /** Take crops out of a patch: plans are deleted, anything planted is marked pulled on the date shown. */
   onRemove: (plantingIds: string[]) => void;
@@ -104,11 +108,11 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
         </div>
       ) : null}
       <ul className="bed-rows">
-        {data.beds.map((bed) => {
+        {byHarvest(data.beds, advice).map((bed) => {
           const a = advice.get(bed.id);
-          const now = a?.current[0];
+          const now = soonestHarvest(a?.current ?? []);
           const next = a?.planned[0];
-          const others = (a?.current ?? []).slice(1).map((p) => p.crop);
+          const others = (a?.current ?? []).filter((p) => p !== now).map((p) => p.crop);
           const nextCrops = [...new Set((a?.planned ?? []).filter((p) => p.planted_date === next?.planted_date).map((p) => p.crop))];
           return (
             <li key={bed.id}>
@@ -137,6 +141,31 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
       </ul>
     </>
   );
+}
+
+/** The growing crop due to be harvested first (trees, which have no real harvest date, go last). */
+function soonestHarvest(current: Planting[]): Planting | undefined {
+  const key = (p: Planting) => (p.crop.toLowerCase().includes("tree") ? "9999" : p.expected_harvest_date);
+  return [...current].sort((x, y) => key(x).localeCompare(key(y)))[0];
+}
+
+/**
+ * Plant list order: empty plots first, then planted ones by harvest date (soonest or overdue on top),
+ * then plots that only have plans, by when they go in. Ties go by name, with numbers in order (Plot 2 before Plot 10).
+ */
+function byHarvest(beds: Bed[], advice: Map<string, BedAdvice>): Bed[] {
+  const rank = (bed: Bed): [number, string] => {
+    const a = advice.get(bed.id);
+    const growing = soonestHarvest(a?.current ?? []);
+    if (growing) return [1, growing.crop.toLowerCase().includes("tree") ? "9999" : growing.expected_harvest_date];
+    if (a?.planned[0]) return [2, a.planned[0].planted_date];
+    return [0, ""];
+  };
+  return [...beds].sort((x, y) => {
+    const [gx, kx] = rank(x);
+    const [gy, ky] = rank(y);
+    return gx - gy || kx.localeCompare(ky) || x.name.localeCompare(y.name, undefined, { numeric: true });
+  });
 }
 
 function statusLine(planting: Planting, today: string): string {
@@ -172,21 +201,33 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
       <button type="button" className="back" onClick={() => props.onSelect(null)}>
         ‹ All beds
       </button>
-      {props.editing ? (
+      {props.editing || props.renamingId === bed.id ? (
         <input
           className="bed-name-input"
           defaultValue={bed.name}
           key={bed.id + bed.name}
-          aria-label="Bed name"
+          aria-label="Plot name"
+          autoFocus={props.renamingId === bed.id}
+          onFocus={(event) => event.target.select()}
           onBlur={(event) => {
-            if (event.target.value.trim() && event.target.value.trim() !== bed.name) props.onRename(bed, event.target.value);
+            const name = event.target.value.trim();
+            if (event.target.dataset.cancel !== "1" && name && name !== bed.name) props.onRename(bed, name);
+            props.onStopRename();
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+            const input = event.target as HTMLInputElement;
+            if (event.key === "Enter") input.blur();
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              input.dataset.cancel = "1";
+              input.blur();
+            }
           }}
         />
       ) : (
-        <h2>{bed.name}</h2>
+        <h2 className="bed-name" title="Double-click to rename" onDoubleClick={() => props.onStartRename(bed.id)}>
+          {bed.name}
+        </h2>
       )}
       <p className="sub">
         {g ? `${showSize(g.w, g.h, data.layout.units ?? "ft")} · ${showArea(g.w, g.h, data.layout.units ?? "ft")}` : "Not on the map yet"}

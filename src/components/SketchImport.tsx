@@ -151,7 +151,7 @@ export function SketchImport(props: {
     setDetection(found);
     setMissed([]);
     const groups = new Set(found.beds.map((b) => b.group)).size;
-    setRows((prev) => Array.from({ length: groups }, (_, i) => prev[i] ?? { name: `Bed ${i + 1}`, crops: "", include: true }));
+    setRows((prev) => Array.from({ length: groups }, (_, i) => prev[i] ?? { name: `Plot ${i + 1}`, crops: "", include: true }));
     if (!lengthTouched && found.frame.w > 0) setLength(Math.max(1, Math.round(((width * found.frame.h) / found.frame.w) * 10) / 10));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [raster, sensitivity]);
@@ -256,13 +256,15 @@ export function SketchImport(props: {
       color: null,
     }));
     setMissed(extra);
+    // Plots are named Plot 1, Plot 2, … (not after their crops); what's written in each box fills in its crops.
+    // Rename them here, or later by double-clicking a plot.
     setRows((current) => [
       ...current.map((row, i) => {
         const found = labels.beds.find((b) => b.n === i + 1);
         if (!found) return row;
-        return { name: found.name ?? row.name, crops: found.crops.join(", "), include: !found.skip };
+        return { name: row.name, crops: found.crops.join(", "), include: !found.skip };
       }),
-      ...labels.missed.map((m) => ({ name: m.name, crops: m.crops.join(", "), include: true })),
+      ...labels.missed.map((m, j) => ({ name: `Plot ${current.length + j + 1}`, crops: m.crops.join(", "), include: true })),
     ]);
 
     // Scale: measurements on the outline's sides beat an overall size, which beats keeping the current one.
@@ -310,7 +312,7 @@ export function SketchImport(props: {
     if (!all || !detection) return;
     setSaving(true);
     setError("");
-    const names = uniqueNames(rows.map((r) => r.name.trim() || "Bed"));
+    const names = uniqueNames(rows.map((r, i) => r.name.trim() || `Plot ${i + 1}`));
     const beds = all.beds.flatMap((bed, i) => {
       const row = rows[bed.group];
       if (!row?.include) return [];

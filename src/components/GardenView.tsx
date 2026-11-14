@@ -28,6 +28,8 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T |
 export function GardenView({ initial }: { initial: GardenData }) {
   const [data, setData] = useState(initial);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The plot whose name is being edited (double-click its name in the plant list, or the plot on the map).
+  const [renamingId, setRenamingId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -279,9 +281,9 @@ export function GardenView({ initial }: { initial: GardenData }) {
         </div>
       </header>
       {error ? <p className="banner">{error}</p> : null}
+      <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
       <div className="garden-workspace">
         <div className="garden-main">
-        <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
         <GardenMap
           layout={data.layout}
           beds={data.beds}
@@ -294,6 +296,10 @@ export function GardenView({ initial }: { initial: GardenData }) {
           editing={editing}
           busy={busy}
           onSelect={setSelectedId}
+          onStartRename={(id) => {
+            setSelectedId(id);
+            setRenamingId(id);
+          }}
           onMove={moveBed}
           onDropCrop={dropCrop}
           onImport={() => setImporting(true)}
@@ -319,6 +325,9 @@ export function GardenView({ initial }: { initial: GardenData }) {
           busy={busy}
           onSelect={setSelectedId}
           onPlan={planFromCard}
+          renamingId={renamingId}
+          onStartRename={setRenamingId}
+          onStopRename={() => setRenamingId(null)}
           onRename={(bed, name) =>
             run(async () => {
               await send(`/api/beds/${bed.id}`, "PATCH", { name });

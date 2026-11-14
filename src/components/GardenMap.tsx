@@ -43,6 +43,8 @@ export function GardenMap(props: {
   editing: boolean;
   busy: boolean;
   onSelect: (id: string | null) => void;
+  /** Double-click on a plot: select it and start renaming it in the plant list. */
+  onStartRename: (id: string) => void;
   onMove: (bed: Bed, geometry: Geometry) => void;
   onDropCrop: (bedId: string, crop: string) => void;
   onAddBed: () => void;
@@ -357,10 +359,18 @@ export function GardenMap(props: {
                 event.stopPropagation();
                 if (!drag) props.onSelect(bed.id);
               }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                props.onStartRename(bed.id);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   props.onSelect(bed.id);
+                }
+                if (event.key === "F2") {
+                  event.preventDefault();
+                  props.onStartRename(bed.id);
                 }
               }}
               onPointerDown={(event) => startDrag(event, bed, "move")}
