@@ -28,6 +28,8 @@ export type Recommendation = {
   plantOn: string;
   /** First date it could go in next to what's already in the bed (not before tomorrow, and inside its sowing window). */
   alongsideOn: string;
+  /** The sooner of plantOn and (for a patch with something in it) alongsideOn: what the card shows. */
+  soonest: string;
   now: boolean;
   cover: boolean;
 };
@@ -108,6 +110,8 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
   const previousFamily = previous ? familyOf(previous.crop) : null;
 
   const recommendations: Recommendation[] = [];
+  // Nothing new goes in before tomorrow (or before the date being looked at, if that's later).
+  const earliest = day > today ? day : addDays(today, 1);
   const avoid: Avoid[] = [];
 
   for (const item of CROP_GUIDE) {
@@ -144,13 +148,18 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
     }
 
     const plantOn = nextSowDate(freeFrom, item.sowMonths);
-    const now = plantOn === day;
+    // A patch with something in it can still take a crop right away, alongside or as a replacement,
+    // so timing goes by the soonest date it could go in, not only after the current crop.
+    const alongsideOn = nextSowDate(earliest, item.sowMonths);
+    const occupied = current.length > 0 || planned.length > 0;
+    const soonest = occupied && alongsideOn < plantOn ? alongsideOn : plantOn;
+    const now = occupied ? alongsideOn === earliest : plantOn === day;
     if (now) {
       score += 3;
       const month = monthName(Number(day.slice(5, 7)));
       reasons.unshift(day === today ? `Can go in now (${month} is in its planting window).` : `Can go in then (${month} is in its planting window).`);
     } else {
-      const wait = Math.round((Date.parse(plantOn) - Date.parse(day)) / 86_400_000);
+      const wait = Math.round((Date.parse(soonest) - Date.parse(day)) / 86_400_000);
       score -= Math.min(2, wait / 120);
     }
     if (item.cover && current.length === 0) {
@@ -158,9 +167,9 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
       reasons.push("Cover crop: protects bare soil and feeds it for spring.");
     }
 
-    const earliest = day > today ? day : addDays(today, 1);
     recommendations.push({
-      alongsideOn: nextSowDate(earliest, item.sowMonths),
+      alongsideOn,
+      soonest,
       crop: item.crop,
       family: family.family,
       score,
@@ -174,7 +183,7 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
     });
   }
 
-  recommendations.sort((a, b) => b.score - a.score || a.plantOn.localeCompare(b.plantOn) || a.crop.localeCompare(b.crop));
+  recommendations.sort((a, b) => b.score - a.score || a.soonest.localeCompare(b.soonest) || a.crop.localeCompare(b.crop));
   return { bedId: bed.id, freeFrom, current, planned, history, recommendations, avoid };
 }
 

@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { DropChoice } from "@/components/DropChoice";
 import { GardenMap } from "@/components/GardenMap";
+import { RemoveChoice } from "@/components/RemoveChoice";
 import { GardenTimeline, timelineRange } from "@/components/GardenTimeline";
 import { PlantList } from "@/components/PlantList";
 import { SketchImport } from "@/components/SketchImport";
 import { ViewTabs } from "@/components/ViewTabs";
 import type { GardenData } from "@/lib/garden-data";
-import { adviseBed, type Recommendation } from "@/lib/recommend";
+import { clearing, cropsInPatch, dropSituation, isEstablished, replacementDate, type Occupant } from "@/lib/drop-plan";
+import { adviseBed, guideFor, type Recommendation } from "@/lib/recommend";
 import type { Bed, GardenLayout } from "@/lib/types";
 
 async function send<T>(url: string, method: string, body?: unknown): Promise<T | null> {
@@ -32,15 +35,34 @@ export function GardenView({ initial }: { initial: GardenData }) {
   const [importing, setImporting] = useState(false);
   // The date the map shows. The timeline moves it into the past (view only) or the future (to plan).
   const [day, setDay] = useState(initial.today);
+  // A crop dropped on a patch that already has something established in it (or several crops), waiting for a choice.
+  const [dropping, setDropping] = useState<{ bedId: string; crop: string; there: Occupant[] } | null>(null);
+  // Delete pressed on a patch with several crops, waiting for which to remove.
+  const [removing, setRemoving] = useState<{ bedId: string; there: Occupant[] } | null>(null);
   const mode: "past" | "today" | "future" = day === data.today ? "today" : day < data.today ? "past" : "future";
 
+  // Escape deselects; Delete or Backspace removes the selected patch's plant (asking which, if there are several).
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") setSelectedId(null);
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      if (!selectedId || mode === "past" || busy || document.querySelector("dialog[open]")) return;
+      event.preventDefault();
+      const there = cropsInPatch(selectedId, data.plantings, day, data.today);
+      const bed = data.beds.find((item) => item.id === selectedId);
+      if (!there.length) {
+        setNotice(`Nothing growing or planned in ${bed?.name ?? "this bed"} to remove.`);
+        return;
+      }
+      if (there.length === 1) removeCrops([there[0].id]);
+      else setRemoving({ bedId: selectedId, there: there.map((planting) => ({ planting, established: isEstablished(planting, day) })) });
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    // Re-attached each render so it always sees the current selection, date, and data.
+  });
 
   // A link like /garden?day=2027-05-01 opens the timeline on that date.
   useEffect(() => {
@@ -130,6 +152,75 @@ export function GardenView({ initial }: { initial: GardenData }) {
     });
   }
 
+  /** Take crops out: plans that haven't started are deleted; anything planted is marked pulled on the date shown. */
+  function removeCrops(plantingIds: string[]) {
+    if (mode === "past") return;
+    const old = data.plantings.filter((p) => plantingIds.includes(p.id));
+    if (!old.length) return;
+    const bed = data.beds.find((item) => item.id === old[0].bed_id);
+    const steps = old.map((p) => ({ planting: p, how: clearing(p, day, data.today) }));
+    const pulled = steps.filter((s) => s.how.action === "pull").map((s) => s.planting.crop);
+    if (pulled.length && !window.confirm(`Mark the ${[...new Set(pulled)].join(" and ")} pulled on ${longDate(day)}? It stays in ${bed?.name ?? "the bed"}'s history.`)) return;
+    const names = [...new Set(old.map((p) => p.crop))].join(" and ");
+    run(async () => {
+      for (const { planting, how } of steps) {
+        if (how.action === "delete") await send(`/api/plantings/${planting.id}`, "DELETE");
+        else await send(`/api/plantings/${planting.id}`, "PATCH", { removed_date: how.on });
+      }
+      setNotice(`Removed the ${names} from ${bed?.name ?? "the bed"}.`);
+    });
+  }
+
+  /** The buttons on a suggestion card. Replace swaps what's in the patch (asking which, if there are several). */
+  function planFromCard(bedId: string, crop: string, how: "after" | "alongside" | "replace" = "after") {
+    if (how !== "replace") return plan(bedId, crop, how);
+    if (mode === "past") return;
+    const there = cropsInPatch(bedId, data.plantings, day, data.today);
+    if (!there.length) return plan(bedId, crop, "after");
+    if (there.length === 1) return replace(bedId, crop, [there[0].id]);
+    setDropping({ bedId, crop, there: there.map((planting) => ({ planting, established: isEstablished(planting, day) })) });
+  }
+
+  /**
+   * Dropping a crop on a patch, as of the timeline date: an empty patch gets it planned as usual; a single crop that
+   * hasn't been in the ground a full day is swapped without asking; anything else asks (replace, after, alongside).
+   */
+  function dropCrop(bedId: string, crop: string) {
+    if (mode === "past") return;
+    const situation = dropSituation(bedId, data.plantings, day, data.today);
+    if (situation.kind === "empty") plan(bedId, crop, "after");
+    else if (situation.kind === "replace") replace(bedId, crop, [situation.old.id]);
+    else setDropping({ bedId, crop, there: situation.there });
+  }
+
+  /** Swap crops out of a patch: fresh plans are deleted, anything real or established is marked pulled. */
+  function replace(bedId: string, crop: string, plantingIds: string[]) {
+    const bed = data.beds.find((item) => item.id === bedId);
+    const old = data.plantings.filter((p) => plantingIds.includes(p.id));
+    if (!bed || !old.length) return;
+    const steps = old.map((p) => ({ planting: p, how: clearing(p, day, data.today) }));
+    // Rotation is checked as if the deleted plans had never been there.
+    const deleted = new Set(steps.filter((s) => s.how.action === "delete").map((s) => s.planting.id));
+    const avoided = adviseBed(bed, data.plantings.filter((p) => !deleted.has(p.id)), day, data.today).avoid.find((item) => item.crop === crop);
+    if (avoided && !window.confirm(`${avoided.reason} Plant ${crop} here anyway?`)) return;
+    const date = replacementDate(old, day, data.today, guideFor(crop)?.sowMonths);
+    const swapped = [...new Set(old.map((p) => p.crop))].join(" and ");
+    run(async () => {
+      for (const { planting, how } of steps) {
+        if (how.action === "delete") await send(`/api/plantings/${planting.id}`, "DELETE");
+        else await send(`/api/plantings/${planting.id}`, "PATCH", { removed_date: how.on });
+      }
+      await send("/api/plantings", "POST", { bed_id: bedId, crop, planted_date: date });
+      setSelectedId(bedId);
+      setNotice(`Replaced the ${swapped} in ${bed.name} with ${crop}, from ${longDate(date)}.`);
+    });
+  }
+
+  const dropBed = dropping ? data.beds.find((bed) => bed.id === dropping.bedId) : null;
+  const dropRec = dropping ? advice.get(dropping.bedId)?.recommendations.find((item) => item.crop === dropping.crop) : undefined;
+  const tomorrow = addOne(data.today);
+  const notBeforeTomorrow = (d: string) => (d > data.today ? d : tomorrow);
+
   return (
     <div className="app garden-app">
       <header className="top">
@@ -161,8 +252,9 @@ export function GardenView({ initial }: { initial: GardenData }) {
         </div>
       </header>
       {error ? <p className="banner">{error}</p> : null}
-      <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
       <div className="garden-workspace">
+        <div className="garden-main">
+        <GardenTimeline today={data.today} day={day} plantings={data.plantings} onChange={showDay} />
         <GardenMap
           layout={data.layout}
           beds={data.beds}
@@ -176,7 +268,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
           busy={busy}
           onSelect={setSelectedId}
           onMove={moveBed}
-          onDropCrop={plan}
+          onDropCrop={dropCrop}
           onImport={() => setImporting(true)}
           onAddBed={() =>
             run(async () => {
@@ -190,6 +282,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
             })
           }
         />
+        </div>
         <PlantList
           data={shown}
           mode={mode}
@@ -198,7 +291,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
           editing={editing}
           busy={busy}
           onSelect={setSelectedId}
-          onPlan={plan}
+          onPlan={planFromCard}
           onRename={(bed, name) =>
             run(async () => {
               await send(`/api/beds/${bed.id}`, "PATCH", { name });
@@ -211,13 +304,59 @@ export function GardenView({ initial }: { initial: GardenData }) {
               setSelectedId(null);
             });
           }}
-          onUnplan={(id) =>
-            run(async () => {
-              await send(`/api/plantings/${id}`, "DELETE");
-            })
-          }
+          onRemove={removeCrops}
         />
       </div>
+      {removing ? (
+        <RemoveChoice
+          key={removing.bedId}
+          bedName={data.beds.find((bed) => bed.id === removing.bedId)?.name ?? "this bed"}
+          there={removing.there}
+          sprites={data.sprites}
+          busy={busy}
+          onRemove={(ids) => {
+            setRemoving(null);
+            removeCrops(ids);
+          }}
+          onCancel={() => setRemoving(null)}
+        />
+      ) : null}
+      {dropping && dropBed ? (
+        <DropChoice
+          key={`${dropping.bedId}-${dropping.crop}`}
+          bedName={dropBed.name}
+          crop={dropping.crop}
+          there={dropping.there}
+          sprites={data.sprites}
+          busy={busy}
+          dates={{
+            replace: replacementDate(
+              dropping.there.map((o) => o.planting),
+              day,
+              data.today,
+              guideFor(dropping.crop)?.sowMonths,
+            ),
+            after: notBeforeTomorrow(dropRec?.plantOn ?? advice.get(dropping.bedId)?.freeFrom ?? day),
+            alongside: notBeforeTomorrow(dropRec?.alongsideOn ?? day),
+          }}
+          onReplace={(ids) => {
+            const { bedId, crop } = dropping;
+            setDropping(null);
+            replace(bedId, crop, ids);
+          }}
+          onAfter={() => {
+            const { bedId, crop } = dropping;
+            setDropping(null);
+            plan(bedId, crop, "after");
+          }}
+          onAlongside={() => {
+            const { bedId, crop } = dropping;
+            setDropping(null);
+            plan(bedId, crop, "alongside");
+          }}
+          onCancel={() => setDropping(null)}
+        />
+      ) : null}
       <SketchImport
         open={importing}
         layout={data.layout}
@@ -243,4 +382,8 @@ function addOne(day: string): string {
   const date = new Date(`${day}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
+}
+
+function longDate(day: string): string {
+  return new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 }

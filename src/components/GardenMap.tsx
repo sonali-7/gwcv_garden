@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { allowedMove, allowedResize } from "@/lib/bed-space";
 import { spriteDataUrl, spriteUrl, TILES } from "@/lib/pixel-sprites";
 import { fromFt, gridStepFt, showSize, toFt, type Units } from "@/lib/units";
 import { inGroundOn, plannedAfter } from "@/lib/plantings";
@@ -11,6 +12,8 @@ type Drag = { id: string; mode: "move" | "resize"; startX: number; startY: numbe
 
 export const CROP_MIME = "application/x-garden-crop";
 
+/** Page height taken by the header, timeline, map toolbar, and footer, so the garden at Fit fits in the rest. */
+const SPACE_ABOVE_AND_BELOW = 80;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
@@ -108,8 +111,10 @@ export function GardenMap(props: {
     return () => observer.disconnect();
   }, [layout.widthFt]);
 
-  // About one plant drawing per 2.5 ft, kept between 18 and 44 px so it stays readable (bigger when zoomed in).
-  const spritePx = Math.round(Math.min(44 * Math.sqrt(zoom), Math.max(18, pxPerFt * 2.5)) / 2) * 2;
+  // About one plant drawing per 2.5 ft, kept between 18 and 44 px so it stays readable. The count per patch is worked
+  // out at normal size (basePxPerFt) and then scaled, so zooming in makes the drawings bigger instead of adding more.
+  const basePxPerFt = pxPerFt / zoom;
+  const spritePx = Math.round(Math.min(44, Math.max(18, basePxPerFt * 2.5)) / 2) * 2;
 
   const beds = placed(props.beds, layout);
   const legend = new Map<string, string>();
@@ -155,7 +160,12 @@ export function GardenMap(props: {
         h: Math.min(Math.max(snap(o.h + dy), 1), layout.lengthFt - o.y),
       };
     }
-    setDrag({ ...drag, current: next });
+    // Patches can't share ground: stop at neighbors (sliding along the free direction).
+    const others = placed(props.beds, layout)
+      .filter((bed) => bed.id !== drag.id)
+      .map((bed) => bed.geometry);
+    const allowed = drag.mode === "move" ? allowedMove(next, drag.current, others) : allowedResize(next, drag.current, others);
+    setDrag({ ...drag, current: allowed });
   }
 
   function endDrag() {
@@ -186,19 +196,40 @@ export function GardenMap(props: {
   const step = gridStepFt(units);
   const gridX = (step / layout.widthFt) * 100;
   const gridY = (step / layout.lengthFt) * 100;
-  const lawn: CSSProperties = {
-    backgroundImage: `linear-gradient(to right, rgba(43, 29, 20, 0.12) 2px, transparent 2px), linear-gradient(to bottom, rgba(43, 29, 20, 0.12) 2px, transparent 2px), ${TILES.grass}`,
+  // The whole garden is one bed of soil, with a faint grid; grass only outside an odd-shaped garden's edge.
+  const ground: CSSProperties = {
+    backgroundImage: `linear-gradient(to right, rgba(255, 236, 200, 0.07) 1px, transparent 1px), linear-gradient(to bottom, rgba(255, 236, 200, 0.07) 1px, transparent 1px), ${TILES.soil}`,
     backgroundSize: `${gridX}% ${gridY}%, ${gridX}% ${gridY}%, 24px 24px`,
   };
   const shape = layout.outline && layout.outline.length >= 3 ? layout.outline : null;
   const shapePct = shape?.map(([x, y]) => [(x / layout.widthFt) * 100, (y / layout.lengthFt) * 100]) ?? null;
-  const surfaceStyle: CSSProperties = shapePct
-    ? { aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`, backgroundImage: TILES.path, backgroundSize: "24px 24px" }
-    : { aspectRatio: `${layout.widthFt} / ${layout.lengthFt}`, ...lawn };
+  // A grass border around the garden, so its soil fills about 80% of the map section.
+  const margin = Math.max(2, 0.1 * Math.max(layout.widthFt, layout.lengthFt));
+  const frameW = layout.widthFt + margin * 2;
+  const frameH = layout.lengthFt + margin * 2;
+  const ratio = (frameW / frameH).toFixed(4);
+  // The grass fills the card's width. Its height fits the whole garden on screen: what the card's width
+  // would need, but no more than the window has room for below the header and timeline (and never tiny).
+  // 100cqw is the card's width (.map-viewport is a size container). Zooming grows both.
+  const frameStyle: CSSProperties = {
+    width: `${zoom * 100}%`,
+    height: `calc(${zoom} * min(100cqw / ${ratio}, max(${Math.round(320 / Number(ratio))}px, 100vh - ${SPACE_ABOVE_AND_BELOW}px)))`,
+    backgroundImage: TILES.grass,
+    backgroundSize: "24px 24px",
+  };
+  const surfaceStyle: CSSProperties = {
+    left: `${(margin / frameW) * 100}%`,
+    top: `${(margin / frameH) * 100}%`,
+    width: `${(layout.widthFt / frameW) * 100}%`,
+    height: `${(layout.lengthFt / frameH) * 100}%`,
+    ...(shapePct ? {} : ground),
+  };
 
   return (
     <section className="map-card" aria-label="Garden map">
       <div className="map-head">
+        <div className="map-heading">
+        <h2 className="map-title">Garden</h2>
         <div className="map-legend" aria-label="Legend">
           {[...legend.entries()].map(([crop, url]) => (
             <span key={crop}>
@@ -215,6 +246,7 @@ export function GardenMap(props: {
             <i className="swatch-planned" />
             planned
           </span>
+        </div>
         </div>
         <div className="map-tools">
           <div className="zoom" role="group" aria-label="Zoom">
@@ -276,9 +308,24 @@ export function GardenMap(props: {
 
       <div ref={viewport} className={`map-viewport${zoom > 1 ? " zoomed" : ""}`}>
       <div
+        className="map-frame"
+        style={frameStyle}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) props.onSelect(null);
+        }}
+      >
+      {/* The garden and its grass border, centred; any extra width is more grass. */}
+      <div
+        className="map-stage"
+        style={{ aspectRatio: `${frameW} / ${frameH}` }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) props.onSelect(null);
+        }}
+      >
+      <div
         ref={surface}
-        className={`map-surface${editing ? " editing" : ""}`}
-        style={{ ...surfaceStyle, width: `${zoom * 100}%` }}
+        className={`map-surface${editing ? " editing" : ""}${shapePct ? " shaped" : ""}`}
+        style={surfaceStyle}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
@@ -295,7 +342,7 @@ export function GardenMap(props: {
             <div
               className="lawn"
               aria-hidden="true"
-              style={{ ...lawn, clipPath: `polygon(${shapePct.map(([x, y]) => `${x}% ${y}%`).join(", ")})` }}
+              style={{ ...ground, clipPath: `polygon(${shapePct.map(([x, y]) => `${x}% ${y}%`).join(", ")})` }}
             />
             <svg className="lawn-edge" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
               <polygon points={shapePct.map(([x, y]) => `${x},${y}`).join(" ")} />
@@ -324,13 +371,17 @@ export function GardenMap(props: {
           // Beds drawn from a plan are often named after their crops; don't say it twice.
           const sayCrops = !shownCrops.length || !shownCrops.every((c) => bed.name.toLowerCase().includes(c.slice(0, 4)));
           const bedPxH = g.h * pxPerFt;
-          const bedPxW = g.w * pxPerFt;
           const compact = bedPxH < 48;
-          const inset = compact ? 4 : 8;
-          const cell = Math.max(10, Math.min(spritePx, bedPxH - inset * 2, bedPxW - inset * 2));
-          const cols = Math.max(1, Math.floor((bedPxW - inset * 2) / cell));
-          const rowsN = Math.max(1, Math.floor((bedPxH - inset * 2) / cell));
+          // Lay the drawings out at normal size, then scale by the zoom.
+          const baseH = g.h * basePxPerFt;
+          const baseW = g.w * basePxPerFt;
+          const baseInset = baseH < 48 ? 3 : 5;
+          const baseCell = Math.max(10, Math.min(spritePx, baseH - baseInset * 2, baseW - baseInset * 2));
+          const cols = Math.max(1, Math.floor((baseW - baseInset * 2) / baseCell));
+          const rowsN = Math.max(1, Math.floor((baseH - baseInset * 2) / baseCell));
           const cells = Math.min(cols * rowsN, 160);
+          const cell = Math.round(baseCell * zoom);
+          const inset = Math.round(baseInset * zoom);
           const tasks = props.tasks.filter((task) => task.bed_id === bed.id);
           const urgent = tasks.find((task) => task.severity === "urgent");
           const upcoming = tasks.find((task) => task.severity === "upcoming");
@@ -351,7 +402,6 @@ export function GardenMap(props: {
                   top: `${(g.y / layout.lengthFt) * 100}%`,
                   width: `${(g.w / layout.widthFt) * 100}%`,
                   height: `${(g.h / layout.lengthFt) * 100}%`,
-                  backgroundImage: TILES.soil,
                 } as CSSProperties
               }
               onClick={(event) => {
@@ -426,6 +476,8 @@ export function GardenMap(props: {
             </div>
           );
         })}
+      </div>
+      </div>
       </div>
       </div>
 

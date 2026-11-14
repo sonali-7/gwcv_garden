@@ -51,10 +51,11 @@ export function PlantList(props: {
   editing: boolean;
   busy: boolean;
   onSelect: (id: string | null) => void;
-  onPlan: (bedId: string, crop: string, how?: "after" | "alongside") => void;
+  onPlan: (bedId: string, crop: string, how?: "after" | "alongside" | "replace") => void;
   onRename: (bed: Bed, name: string) => void;
   onDeleteBed: (bed: Bed) => void;
-  onUnplan: (plantingId: string) => void;
+  /** Take crops out of a patch: plans are deleted, anything planted is marked pulled on the date shown. */
+  onRemove: (plantingIds: string[]) => void;
 }) {
   const { selected } = props;
   return (
@@ -212,12 +213,25 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
                 <small>
                   Planted {shortDate(planting.planted_date)} · {statusLine(planting, data.today).split(" · ")[1] ?? "growing"}
                 </small>
-                <small>
-                  {props.mode === "future" ? "" : lastWater
-                    ? `Last watered ${shortDate(lastWater.start.slice(0, 10))} by ${peopleById.get(lastWater.person_id)?.name ?? "someone"}`
-                    : "No watering logged"}
-                </small>
+                {props.mode === "future" ? null : (
+                  <small>
+                    {lastWater
+                      ? `Last watered ${shortDate(lastWater.start.slice(0, 10))} by ${peopleById.get(lastWater.person_id)?.name ?? "someone"}`
+                      : "No watering logged"}
+                  </small>
+                )}
               </div>
+              {props.mode === "past" ? null : (
+                <button
+                  type="button"
+                  className="texty small"
+                  onClick={() => props.onRemove([planting.id])}
+                  disabled={props.busy}
+                  aria-label={`Remove ${planting.crop}`}
+                >
+                  Remove
+                </button>
+              )}
             </div>
           ))
         ) : (
@@ -238,7 +252,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
             <button
               type="button"
               className="texty small"
-              onClick={() => props.onUnplan(planting.id)}
+              onClick={() => props.onRemove([planting.id])}
               disabled={props.busy}
               aria-label={`Remove planned ${planting.crop}`}
             >
@@ -271,7 +285,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
                 <Sprite crop={rec.crop} sprites={data.sprites} size={30} />
                 <strong>{title(rec.crop)}</strong>
                 <span className={rec.now ? "chip now" : "chip"}>
-                  {rec.now ? (props.mode === "future" ? "Plant then" : "Plant now") : `From ${shortDate(rec.plantOn, rec.plantOn.slice(0, 4) !== data.today.slice(0, 4))}`}
+                  {rec.now ? (props.mode === "future" ? "Plant then" : "Plant now") : `From ${shortDate(rec.soonest, rec.soonest.slice(0, 4) !== data.today.slice(0, 4))}`}
                 </span>
               </header>
               <ul className="why">
@@ -302,11 +316,20 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
                     <button
                       type="button"
                       className="pill"
+                      onClick={() => props.onPlan(bed.id, rec.crop, "replace")}
+                      disabled={props.busy}
+                      title={`Take out the ${occupant} and plant ${rec.crop} instead`}
+                    >
+                      Replace
+                    </button>
+                    <button
+                      type="button"
+                      className="pill"
                       onClick={() => props.onPlan(bed.id, rec.crop, "alongside")}
                       disabled={props.busy}
                       title={`Share the bed with the ${occupant}, from ${shortDate(rec.alongsideOn, true)}`}
                     >
-                      Plant alongside
+                      Alongside
                     </button>
                     <button
                       type="button"
@@ -315,7 +338,7 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
                       disabled={props.busy}
                       title={`After the ${occupant}, from ${shortDate(rec.plantOn, true)}`}
                     >
-                      Plant after
+                      After
                     </button>
                   </span>
                 ) : (
