@@ -123,18 +123,18 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
             <span>{onThisWeek ? "This week" : "Browsing another week"} · Sun–Sat</span>
           </div>
           <div className="week-bar-steps">
-            <button type="button" className="cal-btn" onClick={() => shift(-7)} disabled={busy} aria-label="Previous week">
+            <button type="button" className="icon-btn" onClick={() => shift(-7)} disabled={busy} aria-label="Previous week">
               ‹ Week
             </button>
             <button
               type="button"
-              className={onThisWeek ? "cal-btn on" : "cal-btn"}
+              className={onThisWeek ? "icon-btn on" : "icon-btn"}
               onClick={goThisWeek}
               disabled={busy || onThisWeek}
             >
               This week
             </button>
-            <button type="button" className="cal-btn" onClick={() => shift(7)} disabled={busy} aria-label="Next week">
+            <button type="button" className="icon-btn" onClick={() => shift(7)} disabled={busy} aria-label="Next week">
               Week ›
             </button>
           </div>
@@ -163,10 +163,14 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
           tasks={data.tasks}
           beds={data.beds}
           plantings={data.plantings}
+          people={data.people}
           selectedId={taskId}
           onSelect={(id) => {
             setTaskId(id);
             setSelectedId(null);
+          }}
+          onPlanChange={async () => {
+            await reload(week);
           }}
         />
       </div>

@@ -1,13 +1,14 @@
-import { buildTasks } from "./priority";
+import { reconcilePriorityTasks } from "./planner";
 import { toPublicPerson, type DashboardData } from "./types";
 import { gardenTz, startOfWeekYmd, todayYmd } from "./time";
 import type { Store } from "./store";
-import { gardenRain } from "./weather";
 
 export async function loadDashboard(store: Store, weekStart: string | null, now = new Date()): Promise<DashboardData> {
   const timeZone = gardenTz();
   const today = todayYmd(now, timeZone);
   const week = weekStart && /^\d{4}-\d{2}-\d{2}$/.test(weekStart) ? weekStart : startOfWeekYmd(now, timeZone);
+  // On calendar open (and week reload): rebuild from the garden, drop stale DB task rows.
+  const tasks = await reconcilePriorityTasks(store, now);
   const [people, beds, plantings, sessions, photos] = await Promise.all([
     store.listPeople(),
     store.listBeds(),
@@ -15,9 +16,6 @@ export async function loadDashboard(store: Store, weekStart: string | null, now 
     store.listSessions(),
     store.listPhotos(),
   ]);
-  // Tasks are derived from plantings/sessions; no need to write them on every page load
-  // (that raced with other tabs on Mongo _id). GET /api/tasks still persists when asked.
-  const tasks = buildTasks({ now, beds, plantings, sessions, timeZone, rain: await gardenRain(store) });
 
   const threads: DashboardData["threads"] = {};
   for (const person of people) {

@@ -62,13 +62,28 @@ export function DetailCard({
   if (task) {
     const bed = beds.find((item) => item.id === task.bed_id);
     const planting = plantings.find((item) => item.id === task.planting_id);
+    const assignee = people.find((item) => item.id === task.assignee_id);
+    const statusLabel =
+      task.status === "claimed"
+        ? assignee
+          ? `Claimed by ${assignee.name}`
+          : "Claimed"
+        : task.status === "proposed"
+          ? "Proposed for next week"
+          : task.status === "approved"
+            ? "Open to claim"
+            : task.severity === "urgent"
+              ? "Urgent"
+              : task.severity === "upcoming"
+                ? "Coming up"
+                : "Routine";
     return (
       <article className="detail">
         <header>
           <i className={`mark ${task.type === "water" ? "urgent" : task.type === "harvest" ? "upcoming" : task.type === "fill" ? "fill" : "meeting"}`} />
           <div>
             <h3>{task.title}</h3>
-            <p>{task.severity === "urgent" ? "Urgent" : task.severity === "upcoming" ? "Coming up" : "Routine"}</p>
+            <p>{statusLabel}</p>
           </div>
         </header>
         <p className="did">{task.detail}</p>

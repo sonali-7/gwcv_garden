@@ -5,7 +5,17 @@ import { finishDraft, isEmergency, parseDraft, parseMessage, STANDING_WEEKS, tex
 import type { ActivityType, SessionDraft, TextMemory } from "./types";
 
 const ACTIVITIES = new Set<ActivityType>(["plant", "water", "weed", "harvest", "prep", "meeting", "other"]);
-const KINDS = new Set(["session", "query_schedule", "query_watering", "undo", "edit", "cancel", "unknown"]);
+const KINDS = new Set([
+  "session",
+  "query_schedule",
+  "query_watering",
+  "query_plan",
+  "claim",
+  "undo",
+  "edit",
+  "cancel",
+  "unknown",
+]);
 
 export type GardenContext = {
   today: string;
@@ -27,6 +37,8 @@ export async function interpretMessage(text: string, context?: GardenContext): P
     rules.kind === "edit" ||
     rules.kind === "query_schedule" ||
     rules.kind === "query_watering" ||
+    rules.kind === "query_plan" ||
+    rules.kind === "claim" ||
     rules.kind === "emergency"
   ) {
     return rules;
@@ -283,7 +295,10 @@ function cleanText(value: unknown, max: number): string | null {
 }
 
 const FIELDS: Record<string, { type: string; enum?: string[]; description?: string; items?: { type: string } }> = {
-  kind: { type: "string", enum: ["session", "query_schedule", "query_watering", "undo", "edit", "cancel", "unknown"] },
+  kind: {
+    type: "string",
+    enum: ["session", "query_schedule", "query_watering", "query_plan", "claim", "undo", "edit", "cancel", "unknown"],
+  },
   activity: { type: "string", enum: ["plant", "water", "weed", "harvest", "prep", "meeting", "other"] },
   crop: { type: "string" },
   place: {

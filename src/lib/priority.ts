@@ -30,13 +30,16 @@ export function buildTasks(input: {
   const timeZone = input.timeZone ?? gardenTz();
   const today = todayYmd(input.now, timeZone);
   const tasks: Task[] = [];
-  const active = activePlantings(input.plantings, today);
+  // Same beds the garden map shows — skip archived / missing so priority can't drift.
+  const liveBeds = input.beds.filter((bed) => !bed.archived);
+  const liveBedIds = new Set(liveBeds.map((bed) => bed.id));
+  const active = activePlantings(input.plantings, today).filter((planting) => liveBedIds.has(planting.bed_id));
   const soaked = input.rain ? lastSoaking(input.rain, today) : null;
   const rainDays = soaked ? calendarDaysBetween(soaked.date, today) : null;
   const rainComing = input.rain ? soakingTomorrow(input.rain, addDays(today, 1)) : null;
 
   for (const planting of active) {
-    const bed = input.beds.find((item) => item.id === planting.bed_id) ?? null;
+    const bed = liveBeds.find((item) => item.id === planting.bed_id) ?? null;
     const waters = input.sessions
       .filter((session) => {
         if (session.activity_type !== "water") return false;
@@ -51,53 +54,65 @@ export function buildTasks(input: {
     if ((sinceWater === null || sinceWater >= WATER_AFTER_DAYS) && !rainComing) {
       const logged =
         days === null ? "No watering has been logged for this planting." : `Last watered ${days === 1 ? "1 day" : `${days} days`} ago.`;
+      const detail = input.rain
+        ? `${logged} ${soaked ? `Last good rain ${rainDays === 0 ? "today" : rainDays === 1 ? "yesterday" : `${rainDays} days ago`} (${Math.round(soaked.mm)} mm).` : "No good rain this past week."}`
+        : logged;
       tasks.push({
         id: `water:${planting.id}`,
         type: "water",
         severity: "urgent",
         title: `${cropTitle(planting.crop)} needs watering`,
-        detail: input.rain
-          ? `${logged} ${soaked ? `Last good rain ${rainDays === 0 ? "today" : rainDays === 1 ? "yesterday" : `${rainDays} days ago`} (${Math.round(soaked.mm)} mm).` : "No good rain this past week."}`
-          : logged,
+        detail,
         due_date: input.now.toISOString(),
         planting_id: planting.id,
         bed_id: planting.bed_id,
         status: "open",
+        assignee_id: null,
+        source: "rule",
+        rationale: detail,
       });
     }
 
     const until = calendarDaysBetween(today, planting.expected_harvest_date);
     if (until >= 0 && until <= HARVEST_WINDOW_DAYS) {
+      const detail = `Ready around ${monthDayLabel(planting.expected_harvest_date)}. Planted ${monthDayLabel(planting.planted_date)}.`;
       tasks.push({
         id: `harvest:${planting.id}`,
         type: "harvest",
         severity: "upcoming",
         title: harvestTitle(planting.crop, until),
-        detail: `Ready around ${monthDayLabel(planting.expected_harvest_date)}. Planted ${monthDayLabel(planting.planted_date)}.`,
+        detail,
         due_date: zonedToUtc(planting.expected_harvest_date, 9, 0, timeZone).toISOString(),
         planting_id: planting.id,
         bed_id: planting.bed_id,
         status: "open",
+        assignee_id: null,
+        source: "rule",
+        rationale: detail,
       });
     }
   }
 
-  for (const bed of input.beds.filter((b) => !b.archived)) {
+  for (const bed of liveBeds) {
     if (active.some((planting) => planting.bed_id === bed.id)) continue;
     const planned = input.plantings.find(
       (planting) => planting.bed_id === bed.id && planting.planted_date > today && !planting.removed_date,
     );
     if (planned) continue;
+    const detail = `${bed.name} has no crop in the ground.`;
     tasks.push({
       id: `fill:${bed.id}`,
       type: "fill",
       severity: "routine",
       title: `Fill ${bed.name.charAt(0).toLowerCase()}${bed.name.slice(1)}`,
-      detail: `${bed.name} has no crop in the ground.`,
+      detail,
       due_date: input.now.toISOString(),
       planting_id: null,
       bed_id: bed.id,
       status: "open",
+      assignee_id: null,
+      source: "rule",
+      rationale: detail,
     });
   }
 
@@ -113,16 +128,20 @@ export function buildTasks(input: {
     return start >= todayStart && start <= meetingEnd;
   });
   if (!alreadyMet) {
+    const detail = "Saturday 10:00am. Standing work meeting for the garden.";
     tasks.push({
       id: `meeting:${meetingDay}`,
       type: "meeting",
       severity: "routine",
       title: "Weekly meeting",
-      detail: "Saturday 10:00am. Standing work meeting for the garden.",
+      detail,
       due_date: meeting.toISOString(),
       planting_id: null,
       bed_id: null,
       status: "open",
+      assignee_id: null,
+      source: "rule",
+      rationale: detail,
     });
   }
 

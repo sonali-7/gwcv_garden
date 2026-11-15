@@ -7,6 +7,8 @@ export type ParsedMessage =
   | { kind: "cancel"; instruction: string; includePast: boolean }
   | { kind: "query_schedule" }
   | { kind: "query_watering" }
+  | { kind: "query_plan" }
+  | { kind: "claim"; hint: string }
   | { kind: "edit"; instruction: string }
   | { kind: "session"; draft: SessionDraft }
   | { kind: "unknown" };
@@ -163,8 +165,19 @@ function clockLabel(clock: { h: number; m: number }): string {
   return `${clock.h}:${String(clock.m).padStart(2, "0")}`;
 }
 
+/** iMessage / phones often send curly apostrophes; fold them so claim/undo regexes match. */
+export function normalizeIncomingText(text: string): string {
+  return text
+    .replace(/[\u2018\u2019\u2032\u00B4]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\u00A0/g, " ");
+}
+
+const CLAIM_PREFIX =
+  /^(claim|i'?ll take|i will take|i can take|ill take|i'?ll do|i will do|i can do|assign me|put me on|i'?ll cover|i will cover)\b[:\s-]*/i;
+
 export function parseMessage(text: string): ParsedMessage {
-  const trimmed = text.trim();
+  const trimmed = normalizeIncomingText(text).trim();
   if (!trimmed) return { kind: "unknown" };
   if (isEmergency(trimmed)) return { kind: "emergency" };
   if (/^(?:sorry[,!. ]*)?undo\b/i.test(trimmed)) return { kind: "undo" };
@@ -178,12 +191,34 @@ export function parseMessage(text: string): ParsedMessage {
   }
   if (isScheduleQuery(trimmed)) return { kind: "query_schedule" };
   if (isWaterQuery(trimmed)) return { kind: "query_watering" };
+  if (isPlanQuery(trimmed)) return { kind: "query_plan" };
+  if (isClaimText(trimmed)) {
+    return {
+      kind: "claim",
+      hint: trimmed.replace(CLAIM_PREFIX, "").trim(),
+    };
+  }
   if (/^\s*edit\b/i.test(trimmed)) {
     return { kind: "edit", instruction: trimmed.replace(/^\s*edit\b[:\s-]*/i, "").trim() };
   }
   const draft = parseDraft(trimmed);
   if (!draft?.activity) return { kind: "unknown" };
   return { kind: "session", draft };
+}
+
+function isPlanQuery(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    /\b(what('?s| is) (still )?open|what can i claim|what needs (doing|a volunteer)|open tasks|unclaimed)\b/.test(lower) ||
+    /^(what('?s| is) (still )?needed\??)$/.test(lower)
+  );
+}
+
+function isClaimText(text: string): boolean {
+  const lower = text.toLowerCase();
+  // "I'll take …" / "ill take …" after a plan — never treat as logging a chore.
+  if (CLAIM_PREFIX.test(lower)) return true;
+  return /\b(i'?ll take|i can take|ill take|claim)\b/.test(lower) && /\b(water|harvest|fill|meeting|task|watering|row|bed|plot|space|pea|peas)\b/.test(lower);
 }
 
 export function parseDraft(text: string): SessionDraft | null {

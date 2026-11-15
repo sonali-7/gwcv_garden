@@ -11,6 +11,7 @@ import {
   helpForTimeField,
   isEmergency,
   isHelpRequest,
+  normalizeIncomingText,
   parseDraft,
   parseMessage,
   finishDraft,
@@ -22,6 +23,12 @@ import {
   timeGaps,
 } from "./parse";
 import { buildTasks } from "./priority";
+import {
+  ALREADY_CLAIMED_REPLY,
+  liveTasks,
+  matchClaimTask,
+  openTasksReply,
+} from "./planner";
 import { sessionTouchesWeek } from "./calendar";
 import type { Store } from "./store";
 import {
@@ -78,7 +85,7 @@ export async function handleIncoming(
   input: { phone: string; text: string; now?: Date; image?: IncomingImage | null },
 ): Promise<HandleResult> {
   const now = input.now ?? new Date();
-  const text = input.text.trim().slice(0, 1000);
+  const text = normalizeIncomingText(input.text).trim().slice(0, 1000);
   const phone = input.phone;
   const replies: string[] = [];
   const say = async (line: string) => {
@@ -150,6 +157,8 @@ export async function handleIncoming(
       parsed.kind === "cancel" ||
       parsed.kind === "query_schedule" ||
       parsed.kind === "query_watering" ||
+      parsed.kind === "query_plan" ||
+      parsed.kind === "claim" ||
       parsed.kind === "edit" ||
       (pending.kind === "time" && Boolean(draftAttempt?.activity)) ||
       (pending.kind === "row" &&
@@ -198,6 +207,16 @@ async function processText(
   }
   if (parsed.kind === "query_watering") {
     await say(await wateringText(store, now, person.timezone));
+    if (image) await persistPhoto(store, person.id, image, null, now);
+    return null;
+  }
+  if (parsed.kind === "query_plan") {
+    await say(openTasksReply(await liveTasks(store, now)));
+    if (image) await persistPhoto(store, person.id, image, null, now);
+    return null;
+  }
+  if (parsed.kind === "claim") {
+    await claimTask(store, person, parsed.hint, now, say);
     if (image) await persistPhoto(store, person.id, image, null, now);
     return null;
   }
@@ -950,6 +969,49 @@ async function wateringText(store: Store, now: Date, timeZone: string): Promise<
   const water = tasks.filter((task) => task.type === "water");
   if (water.length === 0) return "Nothing needs watering right now.";
   return water.map((task) => `${task.title}. ${task.detail}`).join(" ");
+}
+
+async function claimTask(
+  store: Store,
+  person: Person,
+  hint: string,
+  now: Date,
+  say: (line: string) => Promise<void>,
+): Promise<void> {
+  const [beds, plantings] = await Promise.all([store.listBeds(), store.listPlantings()]);
+  const tasks = await liveTasks(store, now);
+  const { task, ambiguous } = matchClaimTask(hint, tasks, beds, plantings);
+
+  if (!task && ambiguous.length > 1) {
+    await say(
+      `Which one — ${ambiguous
+        .slice(0, 4)
+        .map((item) => item.title)
+        .join(" or ")}?`,
+    );
+    return;
+  }
+  if (!task) {
+    await say(openTasksReply(tasks));
+    return;
+  }
+
+  if (task.status === "claimed" && task.assignee_id && task.assignee_id !== person.id) {
+    await say(ALREADY_CLAIMED_REPLY);
+    return;
+  }
+  if (task.status === "claimed" && task.assignee_id === person.id) {
+    await say(`You're already on: ${task.title}.`);
+    return;
+  }
+
+  const next = tasks.map((item) =>
+    item.id === task.id
+      ? { ...item, status: "claimed" as const, assignee_id: person.id, source: "planner" as const }
+      : item,
+  );
+  await store.saveTasks(next);
+  await say(`You're on: ${task.title}. Thanks — first come, first served.`);
 }
 
 function needsRow(activity: ActivityType): boolean {

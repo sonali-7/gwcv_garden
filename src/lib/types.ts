@@ -87,6 +87,8 @@ export type Photo = {
   taken_at: string;
 };
 
+export type TaskStatus = "open" | "proposed" | "approved" | "claimed" | "done" | "rejected";
+
 export type Task = {
   id: string;
   type: "water" | "harvest" | "fill" | "meeting";
@@ -96,7 +98,10 @@ export type Task = {
   due_date: string;
   planting_id: string | null;
   bed_id: string | null;
-  status: "open" | "proposed" | "approved";
+  status: TaskStatus;
+  assignee_id: string | null;
+  source: "rule" | "planner";
+  rationale: string;
 };
 
 export type ThreadMessage = {
