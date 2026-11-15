@@ -248,3 +248,14 @@ export type AreaAction =
   | { action: "reshape"; id: string; outline: Array<[number, number]> }
   | { action: "rename"; id: string; name: string }
   | { action: "delete"; id: string };
+
+/** How far right or down an area may reach; the map grows to fit it (the layout API caps sizes at 1000 ft). */
+export const AREA_MAX_FT = 1000;
+
+/** The map's size grown (never shrunk) so every area fits. */
+export function mapFitting(areas: GardenArea[], widthFt: number, lengthFt: number): { widthFt: number; lengthFt: number } {
+  return {
+    widthFt: r1(Math.max(widthFt, ...areas.map((a) => a.x + a.w))),
+    lengthFt: r1(Math.max(lengthFt, ...areas.map((a) => a.y + a.h))),
+  };
+}

@@ -33,6 +33,8 @@ export function GardenView({ initial }: { initial: GardenData }) {
   // The plot whose name is being edited (double-click its name in the plant list, or the plot on the map).
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  // The growing area picked in Edit layout; Delete removes it.
+  const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -51,7 +53,10 @@ export function GardenView({ initial }: { initial: GardenData }) {
   // the patch's plant (asking which, if there are several).
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setSelectedId(null);
+      if (event.key === "Escape") {
+        setSelectedId(null);
+        setSelectedAreaId(null);
+      }
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
         const target = event.target as HTMLElement | null;
         // Inside a text box, Ctrl/⌘+Z undoes typing as usual.
@@ -64,6 +69,18 @@ export function GardenView({ initial }: { initial: GardenData }) {
       if (event.key !== "Delete" && event.key !== "Backspace") return;
       const target = event.target as HTMLElement | null;
       if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      // In Edit layout, a picked area is deleted (it has to be empty of plots; the server says so if not).
+      if (editing && selectedAreaId && !busy && !document.querySelector("dialog[open]")) {
+        event.preventDefault();
+        const area = data.layout.areas?.find((item) => item.id === selectedAreaId);
+        if (area && window.confirm(`Delete ${area.name}? It has to be empty of plots first.`)) {
+          setSelectedAreaId(null);
+          run(`delete ${area.name}`, async () => {
+            await send("/api/layout/areas", "POST", { action: "delete", id: area.id });
+          });
+        }
+        return;
+      }
       if (!selectedId || mode === "past" || busy || document.querySelector("dialog[open]")) return;
       event.preventDefault();
       const bed = data.beds.find((item) => item.id === selectedId);
@@ -363,7 +380,15 @@ export function GardenView({ initial }: { initial: GardenData }) {
           selectedId={selectedId}
           editing={editing}
           busy={busy}
-          onSelect={setSelectedId}
+          onSelect={(id) => {
+            setSelectedId(id);
+            setSelectedAreaId(null);
+          }}
+          selectedAreaId={editing ? selectedAreaId : null}
+          onSelectArea={(id) => {
+            setSelectedAreaId(id);
+            if (id) setSelectedId(null);
+          }}
           onStartRename={(id) => {
             setSelectedId(id);
             setRenamingId(id);

@@ -1,5 +1,5 @@
 import { getStore } from "@/lib/db";
-import { addArea, areaFits, areasOf, bedsInArea, cleanPoints, reshapeArea, resizeArea, shiftArea } from "@/lib/garden-areas";
+import { addArea, AREA_MAX_FT, areaFits, areasOf, bedsInArea, cleanPoints, mapFitting, reshapeArea, resizeArea, shiftArea } from "@/lib/garden-areas";
 import { json, noContent } from "@/lib/http";
 import type { GardenLayout } from "@/lib/types";
 
@@ -40,14 +40,16 @@ export async function POST(request: Request) {
     const dy = r1(Number(body.dy));
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return json({ error: "Move it by a number of feet." }, 400);
     const moved = shiftArea(area, dx, dy);
-    if (!areaFits(moved, areas, layout.widthFt, layout.lengthFt)) return json({ error: "That would overlap another area or leave the map." }, 409);
+    if (!areaFits(moved, areas, AREA_MAX_FT, AREA_MAX_FT)) return json({ error: "That would overlap another area." }, 409);
     // The plots in the area move with it, exactly (no rounding), so they keep their spacing.
     const beds = await store.listBeds();
     for (const bed of bedsInArea(beds.filter((b) => !b.archived), area)) {
       const g = bed.geometry!;
       await store.updateBed({ ...bed, geometry: { ...g, x: r1(g.x + dx), y: r1(g.y + dy) } });
     }
-    const next = { ...layout, areas: areas.map((item) => (item.id === area.id ? moved : item)) };
+    // Growing an area past the map's right or bottom edge grows the map with it.
+    const nextAreas = areas.map((item) => (item.id === area.id ? moved : item));
+    const next = { ...layout, areas: nextAreas, ...mapFitting(nextAreas, layout.widthFt, layout.lengthFt) };
     await store.saveLayout(next);
     return json(next);
   }
@@ -56,21 +58,25 @@ export async function POST(request: Request) {
     const w = r1(Number(body.w));
     const h = r1(Number(body.h));
     const resized = resizeArea(area, w, h);
-    if (!Number.isFinite(w) || !Number.isFinite(h) || !areaFits(resized, areas, layout.widthFt, layout.lengthFt)) {
+    if (!Number.isFinite(w) || !Number.isFinite(h) || !areaFits(resized, areas, AREA_MAX_FT, AREA_MAX_FT)) {
       return json({ error: "That size would overlap another area or leave the map." }, 409);
     }
-    const next = { ...layout, areas: areas.map((item) => (item.id === area.id ? resized : item)) };
+    // Growing an area past the map's right or bottom edge grows the map with it.
+    const nextAreas = areas.map((item) => (item.id === area.id ? resized : item));
+    const next = { ...layout, areas: nextAreas, ...mapFitting(nextAreas, layout.widthFt, layout.lengthFt) };
     await store.saveLayout(next);
     return json(next);
   }
 
   if (body?.action === "reshape") {
-    const points = cleanPoints(body.outline, layout.widthFt, layout.lengthFt);
+    const points = cleanPoints(body.outline, AREA_MAX_FT, AREA_MAX_FT);
     const reshaped = points ? reshapeArea(area, points) : null;
-    if (!reshaped || !areaFits(reshaped, areas, layout.widthFt, layout.lengthFt)) {
+    if (!reshaped || !areaFits(reshaped, areas, AREA_MAX_FT, AREA_MAX_FT)) {
       return json({ error: "That shape would cross itself, overlap another area, or be too small." }, 409);
     }
-    const next = { ...layout, areas: areas.map((item) => (item.id === area.id ? reshaped : item)) };
+    // Growing an area past the map's right or bottom edge grows the map with it.
+    const nextAreas = areas.map((item) => (item.id === area.id ? reshaped : item));
+    const next = { ...layout, areas: nextAreas, ...mapFitting(nextAreas, layout.widthFt, layout.lengthFt) };
     await store.saveLayout(next);
     return json(next);
   }
