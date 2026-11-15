@@ -1,16 +1,16 @@
-# GWCV Garden
+# George Washington Carver Victory Garden
 
-A community garden app for groups that plan on paper, coordinate by text, and need a live picture of what’s in the ground — without asking volunteers to install another heavy app.
+A community garden app for groups that plan on paper, coordinate by text, and need a live picture of what’s in the ground, without asking volunteers to learn another heavy app.
 
-Volunteers text chores (“planted carrots in row 3 from 8–9”, “weeded for an hour”, “what needs watering?”). The text agent logs work, updates plantings, answers short questions, and can take a photo in the on-screen simulator. Organizers use the web app for the **calendar**, **priority list**, and **garden map**. The same records feed both sides.
+Volunteers text chores (“planted carrots in row 3 from 8–9”, “weeded for an hour”, “what needs watering?”). The text agent logs work, updates plantings, and plans upcoming tasks. Organizers use the web app for the **calendar**, **priority list**, and **garden map**. The same records feed both sides.
 
-Built for a real community garden group (HackPrinceton). Users are often non-technical and prefer texting over apps.
+Built for a real community garden group (George Washington Carver Victory Garden). Users are intended to use the app immediately after gardening, sending a quick text summary of the work completed without needing to navigate a clunky UI on your laptop.
 
 ## What’s in the app
 
 | Area | What you get |
 | --- | --- |
-| **Texts** | On-screen phone simulator (Emma / Sonali / Jeremy / New). Optional Photon iMessage/SMS webhook. Parses plant, water, weed, harvest, prep, meeting, and other work into sessions; plant/harvest also update plantings. Clarifies AM/PM or which row once when needed. Undo, edit, cancel/delete. Standing weekly logs. Q&A for schedule, watering, and open plan tasks. Claim chores (“I’ll take watering”). Emergency → fixed 911 reply (not LLM). |
+| **Texts** | Photon iMessage/SMS webhook. Uses Gemini API to parse plant, water, weed, harvest, prep, meeting, and other work into calendar sessions; plant/harvest also update garden simulation plantings. Clarifies AM/PM or which row once when needed. Undo, edit, cancel/delete. Standing weekly logs. Q&A for schedule, watering, and open plan tasks. Claim chores (“I’ll take watering”). Emergency → fixed 911 reply (not LLM). |
 | **Calendar** (`/`) | Sun–Sat week of work blocks, one color per person. Full-day scrollable grid (viewport starts near 7am). Click a block for activity, bed/crop, notes, and photos. Week ‹ › / This week. |
 | **Priority** | Rule-based tasks next to the calendar: watering, harvest window, empty beds, weekly meeting. **Plan next week** uses a deepagents (Gemini) assigner to suggest people already on next week’s calendar, then **Approve & text** sends each volunteer a personal SMS. Volunteers still claim by text; a second claimer gets an anonymous already-claimed reply. No Gemini key → deterministic calendar matching. |
 | **Garden** (`/garden`) | To-scale pixel map, plant list, timeline, edit layout, import a photo of a drawing, rotation suggestions, plant search, soil nitrogen, sustainability score, optional Gemini bed ideas, local seed-search links. |
@@ -113,7 +113,7 @@ Also: `POST /api/messages`, `POST /api/photon`, `POST /api/reset`, `POST /api/la
 
 A planting text creates or updates a planting as well as a work session. One bed can hold many plantings over time; old seasons keep `removed_date` set. Archived beds stay off the map but keep history.
 
-### Priority rules (not an LLM)
+### Priority rules
 
 - **Red, water** — active planting with no water log, or last water ≥ 3 days ago
 - **Orange, harvest** — expected harvest within 21 days
