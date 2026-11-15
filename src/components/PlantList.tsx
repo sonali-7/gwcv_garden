@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { CROP_MIME } from "@/components/GardenMap";
+import { PlantSearch } from "@/components/PlantSearch";
 import { spriteUrl } from "@/lib/pixel-sprites";
 import type { BedIdea } from "@/lib/bed-ideas";
 import type { GardenData } from "@/lib/garden-data";
@@ -404,6 +405,20 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
           </p>
         </section>
       ) : null}
+
+      {props.mode === "past" ? null : (
+        <PlantSearch
+          bed={bed}
+          advice={a}
+          occupant={occupant}
+          future={props.mode === "future"}
+          thisYear={data.today.slice(0, 4)}
+          location={data.layout.location}
+          sprites={data.sprites}
+          busy={props.busy}
+          onPlan={props.onPlan}
+        />
+      )}
 
       {props.mode === "past" || a.permanent ? null : <GeminiIdeas {...props} bed={bed} occupant={occupant} />}
 

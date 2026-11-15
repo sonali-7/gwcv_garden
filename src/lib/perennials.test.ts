@@ -75,3 +75,26 @@ describe("perennials", () => {
     assert.equal(establishedDate("tomatoes", today), today);
   });
 });
+
+describe("searching for a plant", async () => {
+  const { searchPlants } = await import("./plant-search");
+  const advice = adviseBed(bed, [grew("cabbage", "2026-05-01", { expected_harvest_date: "2026-07-20", removed_date: "2026-07-25" })], today);
+
+  it("finds plants by any spelling, word, or family", () => {
+    assert.equal(searchPlants("tomato", advice)[0].crop, "tomatoes");
+    assert.equal(searchPlants("raspberries", advice)[0].crop, "raspberry");
+    assert.ok(searchPlants("berr", advice).some((h) => h.crop === "strawberry"));
+    assert.ok(searchPlants("brassica", advice).some((h) => h.crop === "broccoli"));
+    assert.deepEqual(searchPlants("   ", advice), []);
+  });
+
+  it("says when rotation rules a plant out here, even one without a planting guide", () => {
+    const collards = searchPlants("collards", advice)[0];
+    assert.equal(collards.crop, "collards");
+    assert.match(collards.avoid?.reason ?? "", /Brassica family/);
+    const garlic = searchPlants("garlic", advice)[0];
+    assert.equal(garlic.avoid, null);
+    assert.ok(garlic.rec);
+    assert.ok(searchPlants("asparagus", advice)[0].perennial);
+  });
+});
