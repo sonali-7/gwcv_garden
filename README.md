@@ -12,7 +12,7 @@ Built for a real community garden group (HackPrinceton). Users are often non-tec
 | --- | --- |
 | **Texts** | On-screen phone simulator (Emma / Sonali / Jeremy / New). Optional Photon iMessage/SMS webhook. Parses plant, water, weed, harvest, prep, meeting, and other work into sessions; plant/harvest also update plantings. Clarifies AM/PM or which row once when needed. Undo, edit, cancel/delete. Standing weekly logs. Q&A for schedule, watering, and open plan tasks. Claim chores (“I’ll take watering”). Emergency → fixed 911 reply (not LLM). |
 | **Calendar** (`/`) | Sun–Sat week of work blocks, one color per person. Full-day scrollable grid (viewport starts near 7am). Click a block for activity, bed/crop, notes, and photos. Week ‹ › / This week. |
-| **Priority** | Rule-based tasks next to the calendar: watering, harvest window, empty beds, weekly meeting. **Plan next week** → preview → **Approve & text** to people who have already texted. Volunteers claim by text; a second claimer gets an anonymous already-claimed reply. |
+| **Priority** | Rule-based tasks next to the calendar: watering, harvest window, empty beds, weekly meeting. **Plan next week** uses a deepagents (Gemini) assigner to suggest people already on next week’s calendar, then **Approve & text** sends each volunteer a personal SMS. Volunteers still claim by text; a second claimer gets an anonymous already-claimed reply. No Gemini key → deterministic calendar matching. |
 | **Garden** (`/garden`) | To-scale pixel map, plant list, timeline, edit layout, import a photo of a drawing, rotation suggestions, plant search, soil nitrogen, sustainability score, optional Gemini bed ideas, local seed-search links. |
 
 Tabs switch Garden ↔ Calendar. **Reset demo** restores the sample week.
@@ -25,7 +25,8 @@ Tabs switch Garden ↔ Calendar. **Reset demo** restores the sample week.
 | Data | MongoDB Atlas when `MONGODB_URI` is set; otherwise `data/store.json`. Photos on disk under `public/uploads`; DB holds URLs/metadata |
 | AI | Google Gemini (`GEMINI_API_KEY`, `src/lib/gemini.ts`) for text parse, photo captions, drawing labels, bed ideas. No key → rules parser, plain captions, type names after import |
 | Messaging | Channel adapter: Photon webhook (`POST /api/photon`) + local Texts simulator (`POST /api/messages`) |
-| Priority / rotation / planner | Deterministic TypeScript (`priority.ts`, `recommend.ts`, `planner.ts`, crop guide JSON) — not an LLM |
+| Priority / rotation | Deterministic TypeScript (`priority.ts`, `recommend.ts`, crop guide JSON) |
+| Week planner | deepagents + Gemini (`plan-agent.ts`) for soft assignee suggestions + targeted texts; rules fallback without a key |
 
 ## Run it
 
@@ -73,7 +74,7 @@ Try this in **Texts**:
 2. As Sonali: `from 8-9am I planted kale`, then `space x`. Space X leaves the fill list; a kale planting is created.
 3. As Jeremy: `weeded the carrot row for an hour`, then `10am`.
 4. Ask `what needs watering?` or `what's on the schedule this week?`
-5. In **Priority**, **Plan next week** → review → **Approve & text**. Emma and Sonali both see the plan (they already have threads). As Emma: `I'll take watering`. As Sonali: `I'll take watering` → already-claimed reply.
+5. In **Priority**, **Plan next week** → review the sample personal text → **Approve & text**. Emma and Sonali get tailored texts (they already have threads). As Emma: `I'll take watering`. As Sonali: `I'll take watering` → already-claimed reply.
 6. `undo` removes that person’s latest log.
 7. **New** → text a chore → give a name when asked → they appear on the calendar in their own color.
 8. Attach a photo in the simulator. It’s stored with the session (`GET /api/photos`). (Photon inbound is text-only today.)
@@ -129,7 +130,7 @@ The on-screen phone needs no Photon keys. A real line uses [Photon 2.0](https://
 
 Each incoming text gets at most one reply. Photon outbound replies are capped at `PHOTON_DAILY_LIMIT` per sender per day (default 100). The simulator has no cap. Phone numbers stay in the database and are not returned by the public read APIs.
 
-**Plan next week** always targets the Sunday–Saturday *after* the week shown on the calendar. Recipients are people who have already texted (or whose Photon conversation is known). Approve appends the plan to their thread and sends via Photon when configured.
+**Plan next week** always targets the Sunday–Saturday *after* the week shown on the calendar. A deepagents planner (Gemini via `GEMINI_API_KEY`) matches open chores to people already scheduled that week and drafts personal texts; without a key it uses the same calendar-matching rules. **Approve & text** only messages people who are **both** on that week’s calendar **and** have already texted (so Emma doesn’t get Sonali’s note). Suggestions are soft — anyone can still claim.
 
 ## Garden view
 

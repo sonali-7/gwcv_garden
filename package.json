@@ -10,10 +10,16 @@
     "seed": "tsx src/lib/seed-cli.ts"
   },
   "dependencies": {
+    "@langchain/core": "^1.4.1",
+    "@langchain/google": "^0.2.15",
+    "@langchain/langgraph": "^1.7.4",
+    "deepagents": "^1.16.5",
+    "langchain": "^1.6.6",
     "mongodb": "^6.20.0",
     "next": "^15.5.6",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

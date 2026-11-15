@@ -1,26 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { sessionTouchesWeek } from "./calendar";
+import { buildPersonalTexts, runPlanAgent, type PersonalPlanText, type PlanAssignment } from "./plan-agent";
 import { photonDailyLimit, photonReply, sendPhotonText } from "./photon";
 import { buildTasks } from "./priority";
 import type { Store } from "./store";
 import {
   addDays,
-  formatClock,
   gardenTz,
-  partsInZone,
   startOfWeekYmd,
   todayYmd,
 } from "./time";
 import type { Bed, Person, Planting, Task, ThreadMessage, WorkSession } from "./types";
 
-const DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
 export type WeekPlanPreview = {
   weekStart: string;
   tasks: Task[];
   plannedSessions: WorkSession[];
-  text: string;
   recipients: Array<{ id: string; name: string }>;
+  personalTexts: PersonalPlanText[];
+  agentSource: "agent" | "fallback" | "timeout" | "error" | "no_key";
 };
 
 /** Normalize older stored rows that predate assignee / source fields. */
@@ -37,6 +35,7 @@ export function normalizeTask(task: Partial<Task> & Pick<Task, "id" | "type" | "
     bed_id: task.bed_id ?? null,
     status: task.status ?? "open",
     assignee_id: task.assignee_id ?? null,
+    suggested_assignee_id: task.suggested_assignee_id ?? null,
     source: task.source ?? "rule",
     rationale: task.rationale || task.detail || "",
   };
@@ -53,6 +52,7 @@ export function mergeTaskState(computed: Task[], saved: Task[]): Task[] {
         ...task,
         status: "claimed",
         assignee_id: prev.assignee_id,
+        suggested_assignee_id: null,
         source: prev.source === "planner" ? "planner" : task.source,
         rationale: prev.rationale || task.rationale,
       };
@@ -62,6 +62,7 @@ export function mergeTaskState(computed: Task[], saved: Task[]): Task[] {
         ...task,
         status: prev.status,
         assignee_id: null,
+        suggested_assignee_id: prev.suggested_assignee_id ?? null,
         source: "planner",
         rationale: prev.rationale || task.rationale,
       };
@@ -71,6 +72,7 @@ export function mergeTaskState(computed: Task[], saved: Task[]): Task[] {
         ...task,
         status: prev.status,
         assignee_id: prev.assignee_id,
+        suggested_assignee_id: prev.suggested_assignee_id ?? null,
         source: prev.source,
         rationale: prev.rationale || task.rationale,
       };
@@ -90,67 +92,6 @@ export function upcomingPlannedSessions(
     .filter((session) => new Date(session.start).getTime() > nowMs)
     .filter((session) => sessionTouchesWeek(session, weekStart, timeZone))
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-}
-
-export function formatWeekPlanText(input: {
-  tasks: Task[];
-  plannedSessions: WorkSession[];
-  people: Person[];
-  beds: Bed[];
-  plantings: Planting[];
-  timeZone: string;
-  weekStart: string;
-}): string {
-  const open = input.tasks.filter((task) => task.status !== "done" && task.status !== "rejected");
-  const needs = open.filter((task) => task.status !== "claimed");
-  const claimed = open.filter((task) => task.status === "claimed");
-  const lines: string[] = [];
-  const weekEnd = addDays(input.weekStart, 6);
-  lines.push(`Garden plan for next week (${shortDay(input.weekStart)}–${shortDay(weekEnd)}):`);
-
-  if (needs.length) {
-    lines.push("Still needed:");
-    for (const task of needs.slice(0, 8)) {
-      const mark = task.severity === "urgent" ? "!" : task.severity === "upcoming" ? "·" : "·";
-      lines.push(`${mark} ${task.title}`);
-    }
-    if (needs.length > 8) lines.push(`(+${needs.length - 8} more)`);
-  } else {
-    lines.push("No open priority tasks right now.");
-  }
-
-  if (claimed.length) {
-    lines.push(`Already claimed: ${claimed.length} task${claimed.length === 1 ? "" : "s"} (first come, first served).`);
-  }
-
-  if (input.plannedSessions.length) {
-    lines.push("Already on the calendar:");
-    for (const session of input.plannedSessions.slice(0, 6)) {
-      const who = input.people.find((person) => person.id === session.person_id);
-      const start = partsInZone(new Date(session.start), input.timeZone);
-      const end = partsInZone(new Date(session.end), input.timeZone);
-      const bed = input.beds.find((item) => item.id === session.bed_id);
-      const where = bed ? ` · ${bed.name}` : "";
-      lines.push(
-        `· ${DAY[start.weekday]} ${formatClock(start.hour, start.minute)}–${formatClock(end.hour, end.minute)} ${who?.name ?? "Someone"}${where}: ${session.notes || session.activity_type}`,
-      );
-    }
-    if (input.plannedSessions.length > 6) {
-      lines.push(`(+${input.plannedSessions.length - 6} more planned)`);
-    }
-  }
-
-  lines.push('Reply "I\'ll take watering" (or harvest / fill / meeting, or a bed/crop) to claim one.');
-  return lines.join("\n");
-}
-
-function shortDay(ymd: string): string {
-  const [y, m, d] = ymd.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
 }
 
 /** Anyone who has already sent at least one inbound text (simulator or Photon). */
@@ -214,6 +155,7 @@ export function nextWeekStartYmd(now: Date, timeZone = gardenTz()): string {
 export async function proposeWeekPlan(store: Store, now = new Date()): Promise<WeekPlanPreview> {
   const timeZone = gardenTz();
   const weekStart = nextWeekStartYmd(now, timeZone);
+  const weekEnd = addDays(weekStart, 6);
   const [beds, plantings, sessions, people, saved] = await Promise.all([
     store.listBeds(),
     store.listPlantings(),
@@ -222,60 +164,144 @@ export async function proposeWeekPlan(store: Store, now = new Date()): Promise<W
     store.listTasks(),
   ]);
   const merged = mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone }), saved);
-  const tasks = merged.map((task) => {
-    if (task.status === "claimed" && task.assignee_id) return { ...task, source: "planner" as const };
+  const baseTasks = merged.map((task) => {
+    if (task.status === "claimed" && task.assignee_id) {
+      return { ...task, source: "planner" as const, suggested_assignee_id: null };
+    }
     return {
       ...task,
       status: "proposed" as const,
       assignee_id: null,
+      suggested_assignee_id: null,
       source: "planner" as const,
       rationale: task.rationale || task.detail,
     };
   });
-  await store.saveTasks(tasks);
+
   const plannedSessions = upcomingPlannedSessions(sessions, now, weekStart, timeZone);
-  const recipients = await volunteersWhoTexted(store);
-  const text = formatWeekPlanText({ tasks, plannedSessions, people, beds, plantings, timeZone, weekStart });
+  const visitorIds = new Set(plannedSessions.map((session) => session.person_id));
+  const visitors = people.filter((person) => visitorIds.has(person.id));
+  // Targeted texts only go to people already on next week's calendar who have texted in.
+  // (Everyone who ever texted used to get the same "still open" blast — that felt identical.)
+  const texted = await volunteersWhoTexted(store);
+  const recipients = visitors.filter((person) => texted.some((item) => item.id === person.id));
+
+  const agent = await runPlanAgent({
+    weekStart,
+    weekEnd,
+    timeZone,
+    tasks: baseTasks,
+    visitors,
+    sessions: plannedSessions,
+    beds,
+    plantings,
+    recipients,
+  });
+
+  const tasks = applySuggestions(baseTasks, agent.assignments, people);
+  await store.saveTasks(tasks);
   return {
     weekStart,
     tasks,
     plannedSessions,
-    text,
     recipients: recipients.map((person) => ({ id: person.id, name: person.name })),
+    personalTexts: agent.personalTexts,
+    agentSource: agent.source,
   };
 }
 
+/** Approve the latest proposed plan and send each volunteer their personal text (not one shared blast). */
 export async function approveAndSendPlan(store: Store, now = new Date()): Promise<WeekPlanPreview & { sent: number }> {
-  const preview = await proposeWeekPlan(store, now);
-  const tasks = preview.tasks.map((task) =>
-    task.status === "claimed" ? task : { ...task, status: "approved" as const },
-  );
+  const timeZone = gardenTz();
+  const weekStart = nextWeekStartYmd(now, timeZone);
+  const [beds, plantings, sessions, people, saved] = await Promise.all([
+    store.listBeds(),
+    store.listPlantings(),
+    store.listSessions(),
+    store.listPeople(),
+    store.listTasks(),
+  ]);
+  const merged = mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone }), saved);
+  const hasProposal = merged.some((task) => task.status === "proposed" || task.status === "approved" || task.suggested_assignee_id);
+  const preview = hasProposal
+    ? null
+    : await proposeWeekPlan(store, now);
+
+  const live = preview?.tasks ?? merged;
+  const tasks = live.map((task) => (task.status === "claimed" ? task : { ...task, status: "approved" as const }));
   await store.saveTasks(tasks);
 
-  const people = await volunteersWhoTexted(store);
-  const text = formatWeekPlanText({
-    tasks,
-    plannedSessions: preview.plannedSessions,
-    people: await store.listPeople(),
-    beds: await store.listBeds(),
-    plantings: await store.listPlantings(),
-    timeZone: gardenTz(),
-    weekStart: preview.weekStart,
-  });
+  const plannedSessions = preview?.plannedSessions ?? upcomingPlannedSessions(sessions, now, weekStart, timeZone);
+  const visitorIds = new Set(plannedSessions.map((session) => session.person_id));
+  const visitors = people.filter((person) => visitorIds.has(person.id));
+  const texted = await volunteersWhoTexted(store);
+  const recipients = preview
+    ? preview.recipients
+        .map((item) => people.find((person) => person.id === item.id))
+        .filter((person): person is Person => Boolean(person))
+    : visitors.filter((person) => texted.some((item) => item.id === person.id));
 
+  const assignments: PlanAssignment[] = tasks
+    .filter((task) => task.suggested_assignee_id)
+    .map((task) => ({
+      taskId: task.id,
+      personId: task.suggested_assignee_id!,
+      reason: task.rationale || "",
+    }));
+
+  const personalTexts =
+    preview?.personalTexts?.length
+      ? preview.personalTexts
+      : buildPersonalTexts(
+          {
+            weekStart,
+            weekEnd: addDays(weekStart, 6),
+            timeZone,
+            tasks,
+            visitors,
+            sessions: plannedSessions,
+            beds,
+            plantings,
+            recipients,
+          },
+          assignments,
+        );
+
+  // Never fall back to a shared organizer summary — that made every thread look identical.
+  const byPerson = new Map(personalTexts.map((item) => [item.personId, item.text]));
   let sent = 0;
-  for (const person of people) {
-    const ok = await deliverPlannerText(store, person, text, now);
+  for (const person of recipients) {
+    const body = byPerson.get(person.id);
+    if (!body) continue;
+    const ok = await deliverPlannerText(store, person, body, now);
     if (ok) sent += 1;
   }
 
   return {
-    ...preview,
+    weekStart,
     tasks,
-    text,
-    recipients: people.map((person) => ({ id: person.id, name: person.name })),
+    plannedSessions,
+    recipients: recipients.map((person) => ({ id: person.id, name: person.name })),
+    personalTexts,
+    agentSource: preview?.agentSource ?? "fallback",
     sent,
   };
+}
+
+function applySuggestions(tasks: Task[], assignments: PlanAssignment[], people: Person[]): Task[] {
+  const byTask = new Map(assignments.map((item) => [item.taskId, item]));
+  return tasks.map((task) => {
+    if (task.status === "claimed") return task;
+    const hit = byTask.get(task.id);
+    if (!hit) return { ...task, suggested_assignee_id: null };
+    const who = people.find((person) => person.id === hit.personId);
+    const reason = hit.reason || (who ? `Suggested for ${who.name}` : "Suggested from next week's calendar");
+    return {
+      ...task,
+      suggested_assignee_id: hit.personId,
+      rationale: reason,
+    };
+  });
 }
 
 async function deliverPlannerText(store: Store, person: Person, text: string, now: Date): Promise<boolean> {

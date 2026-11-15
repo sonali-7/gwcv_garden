@@ -15,6 +15,7 @@ import {
   questionFor,
   rowOptionsReply,
   rowQuestion,
+  textHasDay,
   timeGaps,
 } from "./parse";
 import { isMultiAccept, matchLocation } from "./location";
@@ -90,6 +91,41 @@ describe("parser", () => {
     assert.deepEqual(parsed.draft.start, { h: 4, m: 0 });
     assert.deepEqual(parsed.draft.end, { h: 5, m: 0 });
     assert.deepEqual(timeGaps(parsed.draft), ["ampm"]);
+  });
+
+  it("treats update/reschedule as edit", () => {
+    assert.equal(parseMessage("update to 11/26").kind, "edit");
+    if (parseMessage("update to 11/26").kind === "edit") {
+      assert.equal(parseMessage("update to 11/26").instruction, "11/26");
+    }
+    assert.equal(parseMessage("reschedule to next Thursday").kind, "edit");
+    assert.equal(parseMessage("change to 2-4pm").kind, "edit");
+    assert.equal(parseMessage("edit the time to 3pm").kind, "edit");
+  });
+
+  it("schedules a garden visit without asking for a row or inventing a crop", () => {
+    const visit = parseMessage("I'll come in next week on Thursdya for 3 hours from 12 pm - 3 pm");
+    assert.equal(visit.kind, "session");
+    if (visit.kind !== "session") return;
+    assert.equal(visit.draft.activity, "other");
+    assert.equal(visit.draft.crop, null);
+    assert.equal(visit.draft.weekday, 4);
+    assert.equal(visit.draft.nextWeek, true);
+    assert.deepEqual(visit.draft.start, { h: 12, m: 0 });
+    assert.deepEqual(visit.draft.end, { h: 3, m: 0 });
+    assert.equal(visit.draft.startAmpm, "pm");
+    assert.equal(visit.draft.endAmpm, "pm");
+    assert.deepEqual(timeGaps(visit.draft), []);
+    assert.equal(textHasDay("next week on Thursdya"), true);
+    assert.equal(textHasDay("Thrursday from 12-3"), true);
+
+    const me = parseMessage("schedule me next week on Thursday for 3 hours from 12 pm - 3 pm");
+    assert.equal(me.kind, "session");
+    if (me.kind !== "session") return;
+    assert.equal(me.draft.activity, "other");
+    assert.equal(me.draft.crop, null);
+    assert.equal(me.draft.weekday, 4);
+    assert.equal(me.draft.nextWeek, true);
   });
 
   it("asks which day for a meeting at 10am instead of an end time", () => {
@@ -338,16 +374,19 @@ describe("thin week planner", () => {
     const store = createMemoryStore(buildSeed(NOW));
     const plan = await proposeWeekPlan(store, NOW);
     assert.equal(plan.weekStart, "2026-11-15");
-    assert.match(plan.text, /Nov 15/);
     assert.equal(plan.tasks[0].status, "proposed");
-    assert.match(plan.text, /Sweet potato needs watering/);
     assert.ok(plan.recipients.length >= 2);
+    assert.ok(plan.personalTexts.length >= 2);
+    assert.match(plan.personalTexts[0].text, /Hi |I'll take watering/);
+    assert.ok(plan.tasks.some((task) => task.suggested_assignee_id === "person-emma"));
 
     const sent = await approveAndSendPlan(store, NOW);
     assert.equal(sent.tasks[0].status === "claimed" ? "claimed" : "approved", "approved");
     assert.ok(sent.sent >= 2);
     const emma = await store.getThread("+15555501001");
-    assert.ok(emma.some((message) => message.direction === "out" && /Garden plan/.test(message.text)));
+    assert.ok(emma.some((message) => message.direction === "out" && /Hi Emma/.test(message.text)));
+    const sonali = await store.getThread("+15555501002");
+    assert.ok(sonali.some((message) => message.direction === "out" && /Hi Sonali/.test(message.text)));
   });
 
   it("keeps the first claim and anonymously blocks the second", async () => {
@@ -891,6 +930,26 @@ describe("text log", () => {
       timeZone: DEFAULT_TZ,
     });
     assert.ok(!afterMeet.some((task) => task.type === "meeting"));
+  });
+
+  it("reschedules the latest visit when told update to a new date", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const booked = await handleIncoming(store, {
+      phone: "+15555501002",
+      text: "I'll come in next week on Thursday from 12pm-3pm",
+      now: NOW,
+    });
+    assert.ok(booked.session);
+    assert.equal(booked.session?.start, "2026-11-19T17:00:00.000Z");
+
+    const moved = await handleIncoming(store, {
+      phone: "+15555501002",
+      text: "update to 11/26",
+      now: NOW,
+    });
+    assert.match(moved.replies[0], /Updated: Sonali/);
+    assert.equal(moved.session?.start, "2026-11-26T17:00:00.000Z");
+    assert.equal(moved.session?.end, "2026-11-26T20:00:00.000Z");
   });
 
   it("undoes the last log and answers schedule and watering questions", async () => {

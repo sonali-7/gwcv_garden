@@ -30,7 +30,11 @@ export function PriorityPanel({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [preview, setPreview] = useState<{ text: string; recipients: number } | null>(null);
+  const [preview, setPreview] = useState<{
+    recipients: number;
+    personalTexts: Array<{ personId: string; name: string; text: string }>;
+    agentSource: "agent" | "fallback" | "timeout" | "error" | "no_key";
+  } | null>(null);
   const [sentNote, setSentNote] = useState("");
 
   async function propose() {
@@ -44,12 +48,17 @@ export function PriorityPanel({
         body: JSON.stringify({ action: "propose" }),
       });
       const body = (await response.json()) as {
-        text?: string;
         recipients?: Array<{ id: string }>;
+        personalTexts?: Array<{ personId: string; name: string; text: string }>;
+        agentSource?: "agent" | "fallback" | "timeout" | "error" | "no_key";
         error?: string;
       };
       if (!response.ok) throw new Error(body.error || "Could not build the plan.");
-      setPreview({ text: body.text ?? "", recipients: body.recipients?.length ?? 0 });
+      setPreview({
+        recipients: body.recipients?.length ?? 0,
+        personalTexts: body.personalTexts ?? [],
+        agentSource: body.agentSource ?? "fallback",
+      });
       await onPlanChange();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not build the plan.");
@@ -72,8 +81,8 @@ export function PriorityPanel({
       const n = body.sent ?? 0;
       setSentNote(
         n === 0
-          ? "Plan approved. Nobody has texted in yet, so no texts went out."
-          : `Plan approved and texted to ${n} volunteer${n === 1 ? "" : "s"} who already messaged the garden.`,
+          ? "Plan approved. Nobody both on next week’s calendar and already texting got a message."
+          : `Plan approved and texted personally to ${n} volunteer${n === 1 ? "" : "s"} already coming next week.`,
       );
       setPreview(null);
       await onPlanChange();
@@ -84,6 +93,8 @@ export function PriorityPanel({
     }
   }
 
+  const sample = preview?.personalTexts[0] ?? null;
+
   return (
     <aside className="priority">
       <header>
@@ -91,7 +102,7 @@ export function PriorityPanel({
         <p>From the work log and planting dates.</p>
         <div className="priority-plan">
           <button type="button" className="icon-btn" onClick={propose} disabled={busy}>
-            Plan next week
+            {busy ? "Planning…" : "Plan next week"}
           </button>
           {preview ? (
             <button type="button" className="icon-btn on" onClick={approve} disabled={busy}>
@@ -102,9 +113,26 @@ export function PriorityPanel({
         {error ? <p className="priority-note error">{error}</p> : null}
         {sentNote ? <p className="priority-note">{sentNote}</p> : null}
         {preview ? (
-          <pre className="plan-preview" aria-label="Proposed week plan">
-            {preview.text}
-          </pre>
+          <>
+            <p className="priority-note">
+              {preview.recipients === 0
+                ? "Nobody is on next week’s calendar yet (who has also texted), so Approve won’t send texts. Schedule visits first."
+                : preview.agentSource === "agent"
+                  ? `Agent suggestions for ${preview.recipients} volunteer${preview.recipients === 1 ? "" : "s"} already on next week’s calendar.`
+                  : preview.agentSource === "timeout"
+                    ? `Agent timed out — used calendar matching for ${preview.recipients} volunteer${preview.recipients === 1 ? "" : "s"} already coming.`
+                    : preview.agentSource === "error"
+                      ? `Agent errored — used calendar matching for ${preview.recipients} volunteer${preview.recipients === 1 ? "" : "s"} already coming.`
+                      : preview.agentSource === "no_key"
+                        ? `Calendar matching for ${preview.recipients} volunteer${preview.recipients === 1 ? "" : "s"} (GEMINI_API_KEY not loaded — restart npm run dev).`
+                        : `Calendar matching for ${preview.recipients} volunteer${preview.recipients === 1 ? "" : "s"} already coming.`}
+            </p>
+            {sample ? (
+              <pre className="plan-preview personal" aria-label={`Sample text for ${sample.name}`}>
+                {`Sample text → ${sample.name}\n${sample.text}`}
+              </pre>
+            ) : null}
+          </>
         ) : null}
       </header>
       <ul>
@@ -113,15 +141,20 @@ export function PriorityPanel({
           const planting = plantings.find((item) => item.id === task.planting_id);
           const where = bed?.name ?? (planting ? cropTitle(planting.crop) : null);
           const assignee = people.find((person) => person.id === task.assignee_id);
+          const suggested = people.find((person) => person.id === task.suggested_assignee_id);
           const claimLabel =
             task.status === "claimed"
               ? assignee
                 ? `Claimed · ${assignee.name}`
                 : "Claimed"
               : task.status === "proposed"
-                ? "Proposed"
+                ? suggested
+                  ? `Suggested · ${suggested.name}`
+                  : "Proposed"
                 : task.status === "approved"
-                  ? "Open to claim"
+                  ? suggested
+                    ? `Open · suggested ${suggested.name}`
+                    : "Open to claim"
                   : null;
           return (
             <li key={task.id}>
