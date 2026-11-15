@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isPdf, pdfFirstPage } from "@/lib/pdf-page";
 import { canonicalCrop, knownCrops } from "@/lib/crops";
 import {
   boxDownscale,
@@ -15,6 +16,7 @@ import {
 import type { SketchLabels } from "@/lib/sketch-labels";
 import type { GardenLayout } from "@/lib/types";
 import { fromFt, toFt, type Units } from "@/lib/units";
+import { isPerennial } from "@/lib/perennials";
 
 type Row = { name: string; crops: string; include: boolean };
 type Result = { created: number; moved: number; removed: number; planted: number; archived: string[] };
@@ -51,6 +53,11 @@ function splitCrops(text: string): string[] {
     .filter((c) => c && c !== "nothing");
 }
 
+/** The perennials named in a row's crops, so the row can say they'll stay put. */
+function perennialsIn(text: string): string[] {
+  return [...new Set(splitCrops(text).map(canonicalCrop).filter(isPerennial))];
+}
+
 /** Repeated names ("Kale", "Kale") get numbers so each bed can be told apart. */
 function uniqueNames(names: string[]): string[] {
   const total = new Map<string, number>();
@@ -84,7 +91,8 @@ export function SketchImport(props: {
   const [length, setLength] = useState(fromFt(props.layout.lengthFt, props.layout.units));
   const [lengthTouched, setLengthTouched] = useState(false);
   const [mode, setMode] = useState<"replace" | "add">("replace");
-  const [background, setBackground] = useState(false);
+  // "Using page 1 of 3 from the PDF", or "Opening the PDF…" while it's being drawn.
+  const [pdfNote, setPdfNote] = useState("");
   const [reading, setReading] = useState<"idle" | "busy" | "done" | "off">("idle");
   const [scaleNote, setScaleNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -107,6 +115,7 @@ export function SketchImport(props: {
     setRows([]);
     setReading("idle");
     setScaleNote("");
+    setPdfNote("");
     setError("");
     setLengthTouched(false);
     setUnits(props.layout.units);
@@ -160,19 +169,38 @@ export function SketchImport(props: {
     if (!file) return;
     reset();
     try {
-      const image = await loadImage(file);
+      // A PDF plan is drawn to an image first (page 1), then treated like a photo.
+      let source: Blob = file;
+      if (isPdf(file)) {
+        setPdfNote("Opening the PDF…");
+        const { image: page, pages } = await pdfFirstPage(file);
+        source = page;
+        setPdfNote(pages > 1 ? `Using page 1 of ${pages} from the PDF.` : "");
+      }
+      const image = await loadImage(source);
       setImg(image);
       setPreviewUrl(scaled(image, 1400).toDataURL("image/jpeg", 0.85));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't open that image.");
+      setPdfNote("");
+      setError(
+        isPdf(file)
+          ? "Couldn't open that PDF. If it's password-protected or damaged, export the plan as a PNG or JPG instead."
+          : err instanceof Error
+            ? err.message
+            : "Couldn't open that image.",
+      );
     }
   }
 
-  /** Number the beds and letter the outline's sides on a copy, then ask Gemini to read both. */
+  /**
+   * Number the beds and letter the outline's sides on a copy, then ask Gemini to read both.
+   * If no boxes were found, send just the drawing and let Gemini find the beds.
+   */
   async function readLabels() {
-    if (!img || !detection || !detection.beds.length) return;
+    if (!img || !detection) return;
     setReading("busy");
     setError("");
+    const finding = detection.beds.length === 0;
     const marked = scaled(img, 1600);
     const ctx = marked.getContext("2d")!;
     const k = marked.width / detection.width;
@@ -221,8 +249,8 @@ export function SketchImport(props: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           original: scaled(img, 1600).toDataURL("image/jpeg", 0.85),
-          marked: marked.toDataURL("image/jpeg", 0.85),
-          count: rows.length,
+          marked: finding ? undefined : marked.toDataURL("image/jpeg", 0.85),
+          count: finding ? 0 : rows.length,
           edges: detection.edges.map((e) => e.label),
         }),
       });
@@ -242,6 +270,14 @@ export function SketchImport(props: {
 
   function applyLabels(labels: SketchLabels) {
     if (!detection) return;
+    // Gemini found the beds itself: measure them against the garden edge it saw, not the whole page.
+    if (!detection.beds.length && labels.garden && labels.missed.length) {
+      const [x0, y0, x1, y1] = labels.garden;
+      setDetection({
+        ...detection,
+        frame: { x: x0 * detection.width, y: y0 * detection.height, w: (x1 - x0) * detection.width, h: (y1 - y0) * detection.height },
+      });
+    }
     const extra: DetectedBed[] = labels.missed.map((m, i) => ({
       rect: {
         x: m.box[0] * detection.width,
@@ -294,7 +330,7 @@ export function SketchImport(props: {
 
   // Read labels automatically once beds are found in a new picture.
   useEffect(() => {
-    if (detection && detection.beds.length && reading === "idle") void readLabels();
+    if (detection && reading === "idle") void readLabels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detection]);
 
@@ -331,7 +367,6 @@ export function SketchImport(props: {
           lengthFt,
           outline: outlineToFeet(detection, widthFt, lengthFt),
           beds,
-          backgroundDataUrl: background ? cropToFrame() : undefined,
         }),
       });
       const result = (await response.json()) as Result & { error?: string };
@@ -346,21 +381,6 @@ export function SketchImport(props: {
   }
 
   /** The drawing cut to the garden's edge, so it lines up behind the beds. */
-  function cropToFrame(): string | undefined {
-    if (!img || !detection) return undefined;
-    const k = img.naturalWidth / detection.width;
-    const f = detection.frame;
-    const canvas = document.createElement("canvas");
-    const scale = Math.min(1, 1400 / (f.w * k));
-    canvas.width = Math.round(f.w * k * scale);
-    canvas.height = Math.round(f.h * k * scale);
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, f.x * k, f.y * k, f.w * k, f.h * k, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.82);
-  }
-
   const groupCount = rows.length;
   const unitLabel = units === "m" ? "m" : "ft";
 
@@ -402,7 +422,7 @@ export function SketchImport(props: {
           </svg>
           <div>
             <p>
-              <strong>Drop in a drawing or diagram of the garden:</strong> a photo of a sketch, or an image from a drawing app.
+              <strong>Drop in a drawing or diagram of the garden:</strong> a photo of a sketch, an image from a drawing app, or a PDF.
             </p>
             <ul>
               <li>Draw each bed as a closed box, or a solid block of color.</li>
@@ -425,7 +445,7 @@ export function SketchImport(props: {
             <input
               ref={fileInput}
               type="file"
-              accept="image/*"
+              accept="image/*,application/pdf,.pdf"
               className="sr"
               onChange={(event) => {
                 void pick(event.target.files?.[0]);
@@ -509,7 +529,7 @@ export function SketchImport(props: {
               <input
                 ref={fileInput}
                 type="file"
-                accept="image/*"
+                accept="image/*,application/pdf,.pdf"
                 className="sr"
                 onChange={(event) => {
                   void pick(event.target.files?.[0]);
@@ -524,10 +544,14 @@ export function SketchImport(props: {
               {!detection
                 ? "Looking for beds…"
                 : detection.beds.length === 0
-                  ? "No beds found. Try the slider, or make sure each box is closed at the corners."
+                  ? reading === "busy"
+                    ? "No closed boxes found, so Gemini is looking for the beds…"
+                    : missed.length
+                      ? `Gemini found ${missed.length} bed${missed.length === 1 ? "" : "s"} (dashed). Their boxes are rough, so check their size and position.`
+                      : "No beds found. Try the slider, or make sure each box is closed at the corners."
                   : `Found ${groupCount} bed${groupCount === 1 ? "" : "s"}${detection.outline ? " and the garden's edge" : detection.frameFromBorder ? " inside the garden edge" : ""}.`}
-              {reading === "busy" ? " Reading the writing…" : null}
-              {missed.length ? ` ${missed.length} more found by reading the labels (dashed). Check their size and position.` : null}
+              {reading === "busy" && detection?.beds.length ? " Reading the writing…" : null}
+              {missed.length && detection?.beds.length ? ` ${missed.length} more found by reading the labels (dashed). Check their size and position.` : null}
               {reading === "done" ? (
                 <button type="button" className="texty small" onClick={() => void readLabels()}>
                   Read the writing again
@@ -573,6 +597,9 @@ export function SketchImport(props: {
                         <small>
                           {ft.map((g) => `${fromFt(g.w, units)}×${fromFt(g.h, units)} ${unitLabel}`).join(" + ")}
                           {parts.length > 1 ? " (L-shape, saved as two beds)" : ""}
+                          {perennialsIn(row.crops).length
+                            ? ` · ${perennialsIn(row.crops).join(", ")}: perennial, stays planted year to year`
+                            : ""}
                         </small>
                       </div>
                       <label className="keep">
@@ -649,11 +676,7 @@ export function SketchImport(props: {
                 archived: off the map, history kept.
               </small>
             </fieldset>
-            <label className="sketch-bg">
-              <input type="checkbox" checked={background} onChange={(event) => setBackground(event.target.checked)} />
-              Show the drawing behind the map
-            </label>
-
+            {pdfNote ? <p className="sketch-note">{pdfNote}</p> : null}
             {error ? <p className="banner">{error}</p> : null}
             <button
               type="button"
@@ -666,6 +689,7 @@ export function SketchImport(props: {
           </div>
         </div>
       )}
+      {!img && pdfNote ? <p className="sketch-note">{pdfNote}</p> : null}
       {!img && error ? <p className="banner">{error}</p> : null}
     </dialog>
   );

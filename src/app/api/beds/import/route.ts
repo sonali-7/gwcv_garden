@@ -4,6 +4,7 @@ import { getStore } from "@/lib/db";
 import { cleanGeometry, cleanName } from "@/lib/garden-api";
 import { json, noContent } from "@/lib/http";
 import { saveDataUrl } from "@/lib/media";
+import { establishedDate } from "@/lib/perennials";
 import { isActive } from "@/lib/plantings";
 import { addDays, gardenTz, todayYmd } from "@/lib/time";
 import type { Bed } from "@/lib/types";
@@ -115,13 +116,14 @@ export async function POST(request: Request) {
           .map((other) => plantings.find((p) => p.bed_id === other.bed.id && isActive(p, today) && p.crop.toLowerCase() === crop))
           .find(Boolean);
         const days = sibling?.days_to_maturity ?? maturityDays(crop);
-        const planted_date = sibling?.planted_date ?? today;
+        // A perennial on a plan of an existing garden is assumed established (already producing), not newly planted.
+        const planted_date = sibling?.planted_date ?? establishedDate(crop, today);
         await store.insertPlanting({
           id: `planting-${randomUUID().slice(0, 8)}`,
           bed_id: item.bed.id,
           crop,
           planted_date,
-          expected_harvest_date: sibling?.expected_harvest_date ?? addDays(today, days),
+          expected_harvest_date: sibling?.expected_harvest_date ?? addDays(planted_date, days),
           removed_date: null,
           season_year: Number(planted_date.slice(0, 4)),
           days_to_maturity: days,

@@ -138,6 +138,26 @@ describe("reading labels from Gemini's reply", async () => {
     assert.equal(out.widthFt, 40);
     assert.equal(out.lengthFt, 30);
   });
+  it("reads the beds and garden edge Gemini found on its own", () => {
+    const text = `{"missed":[{"name":"Corn","crops":["corn"],"box":[0.1,0.1,0.4,0.3]},{"name":"Roses","crops":["roses"],"box":[0.5,0.6,0.5,0.9]}],
+"garden":[0.05,0.05,0.95,0.9],"units":"m","widthFt":32.8,"lengthFt":26.2}`;
+    const out = parseLabels(text, 0);
+    assert.deepEqual(out.missed.map((m) => [m.name, m.crops]), [["Corn", ["corn"]]]);
+    assert.deepEqual(out.garden, [0.05, 0.05, 0.95, 0.9]);
+    assert.equal(out.widthFt, 32.8);
+    assert.equal(parseLabels(`{"garden":[0.5,0.5,0.2,0.9]}`, 0).garden, null);
+  });
+  it("trims Gemini's boxes so no two plots overlap", async () => {
+    const { separateBoxes } = await import("./sketch-labels");
+    const boxes = separateBoxes([
+      [0.2, 0.3, 0.49, 0.46], // an L-shaped bed's whole outline
+      [0.3, 0.3, 0.75, 0.4], // the bed tucked into its corner
+      [0.8, 0.1, 0.9, 0.2], // off on its own
+    ]);
+    const hit = (a: number[], b: number[]) => Math.min(a[2], b[2]) > Math.max(a[0], b[0]) && Math.min(a[3], b[3]) > Math.max(a[1], b[1]);
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) assert.ok(!hit(boxes[i], boxes[j]), JSON.stringify(boxes));
+    assert.deepEqual(boxes[2], [0.8, 0.1, 0.9, 0.2]);
+  });
   it("survives a reply that isn't JSON", () => {
     assert.deepEqual(parseLabels("sorry, I can't read that", 2).beds, []);
   });

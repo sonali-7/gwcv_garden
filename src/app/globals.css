@@ -2706,3 +2706,162 @@ h1 {
 .plan-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; }
 .pill.small { padding: 3px 10px; font-size: 12.5px; }
 .growing.overdue small em { font-style: normal; color: #b0631a; font-weight: 600; }
+
+/* Soil nitrogen in the plot panel: a low-to-rich meter with a marker. */
+.nitrogen h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.n-level {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: #fff;
+}
+.n-level.low {
+  background: var(--orange);
+}
+.n-level.balanced {
+  background: var(--olive);
+}
+.n-level.rich {
+  background: var(--green);
+}
+.n-meter {
+  position: relative;
+  height: 8px;
+  margin: 6px 0 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--orange), var(--olive) 55%, var(--green));
+}
+.n-meter i {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 3px solid var(--ink);
+  transform: translate(-50%, -50%);
+}
+.nitrogen p {
+  margin: 4px 0 0;
+  font-size: 0.86rem;
+}
+.n-flag {
+  margin-left: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--orange) 18%, transparent);
+  color: #9a5a0c;
+  vertical-align: 1px;
+}
+
+/* Perennial plots: a woodchip-mulch look and a solid edge, since they stay put year to year. */
+.bed.perennial {
+  outline: 2px solid rgba(214, 170, 104, 0.75);
+  outline-offset: -2px;
+  background:
+    radial-gradient(circle at 30% 40%, rgba(196, 146, 82, 0.35) 0 1.5px, transparent 2px) 0 0 / 9px 9px,
+    radial-gradient(circle at 70% 75%, rgba(120, 78, 40, 0.4) 0 1.5px, transparent 2px) 0 0 / 11px 11px,
+    rgba(150, 104, 58, 0.22);
+}
+.swatch-perennial {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background: #8a5f36;
+  outline: 2px solid #d6aa68;
+  outline-offset: -2px;
+}
+.perennial-tag {
+  margin-left: 6px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
+  vertical-align: 2px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* "Find a plant" search in the plot panel. */
+.plant-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1.5px solid var(--ink-line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+}
+.plant-search-input:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--green) 35%, transparent);
+  outline-offset: 1px;
+}
+.plant-search > .quiet {
+  margin: 6px 0 0;
+}
+.search-hits {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.search-hits li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  cursor: grab;
+}
+.search-hits li > div {
+  flex: 1;
+  min-width: 0;
+}
+.search-hits strong small {
+  font-weight: 400;
+  color: var(--muted);
+}
+.hit-note {
+  margin: 2px 0 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.hit-note.warn {
+  color: #9a5a0c;
+}
+.search-hits footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.search-hits footer a {
+  font-size: 0.78rem;
+  color: var(--green);
+}
+.search-hits .pill,
+.search-none .pill {
+  padding: 3px 10px;
+  font-size: 0.78rem;
+}
+.search-none {
+  margin-top: 6px;
+}
+.search-none p {
+  margin: 0 0 6px;
+}

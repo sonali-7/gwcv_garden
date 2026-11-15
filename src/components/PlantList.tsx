@@ -2,9 +2,12 @@
 
 import { useState } from "react";
 import { CROP_MIME } from "@/components/GardenMap";
+import { PlantSearch } from "@/components/PlantSearch";
 import { spriteUrl } from "@/lib/pixel-sprites";
 import type { BedIdea } from "@/lib/bed-ideas";
 import type { GardenData } from "@/lib/garden-data";
+import { harvestSeason, isPerennial, monthsLabel, nextReady, perennialInfo } from "@/lib/perennials";
+import { nitrogenReason, nitrogenTip, type NitrogenBalance } from "@/lib/nitrogen";
 import type { BedAdvice, Recommendation } from "@/lib/recommend";
 import type { Bed, Planting } from "@/lib/types";
 import { showArea, showSize } from "@/lib/units";
@@ -112,9 +115,9 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
         </div>
       ) : null}
       <ul className="bed-rows">
-        {byHarvest(data.beds, advice).map((bed) => {
+        {byHarvest(data.beds, advice, data.today).map((bed) => {
           const a = advice.get(bed.id);
-          const now = soonestHarvest(a?.current ?? []);
+          const now = soonestHarvest(a?.current ?? [], data.today);
           const next = a?.planned[0];
           const others = (a?.current ?? []).filter((p) => p !== now).map((p) => p.crop);
           const nextCrops = [...new Set((a?.planned ?? []).filter((p) => p.planted_date === next?.planted_date).map((p) => p.crop))];
@@ -127,7 +130,14 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
                   <i className="hollow" />
                 )}
                 <span>
-                  <strong>{bed.name}</strong>
+                  <strong>
+                    {bed.name}
+                    {a?.nitrogen.level === "low" ? (
+                      <span className="n-flag" title="Low on nitrogen: try beans, peas or clover next">
+                        Low N
+                      </span>
+                    ) : null}
+                  </strong>
                   <small>
                     {now
                       ? statusLine(now, data.today) + (others.length ? ` · also ${others.join(", ")}` : "")
@@ -147,21 +157,23 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
   );
 }
 
-/** The growing crop due to be harvested first (trees, which have no real harvest date, go last). */
-function soonestHarvest(current: Planting[]): Planting | undefined {
-  const key = (p: Planting) => (p.crop.toLowerCase().includes("tree") ? "9999" : p.expected_harvest_date);
-  return [...current].sort((x, y) => key(x).localeCompare(key(y)))[0];
+/**
+ * The growing crop ready first. Perennials go by their next harvest season (today if in season);
+ * ones that aren't picked, like roses and trees, go last.
+ */
+function soonestHarvest(current: Planting[], day: string): Planting | undefined {
+  return [...current].sort((x, y) => nextReady(x, day).localeCompare(nextReady(y, day)))[0];
 }
 
 /**
  * Plant list order: empty plots first, then planted ones by harvest date (soonest or overdue on top),
  * then plots that only have plans, by when they go in. Ties go by name, with numbers in order (Plot 2 before Plot 10).
  */
-function byHarvest(beds: Bed[], advice: Map<string, BedAdvice>): Bed[] {
+function byHarvest(beds: Bed[], advice: Map<string, BedAdvice>, day: string): Bed[] {
   const rank = (bed: Bed): [number, string] => {
     const a = advice.get(bed.id);
-    const growing = soonestHarvest(a?.current ?? []);
-    if (growing) return [1, growing.crop.toLowerCase().includes("tree") ? "9999" : growing.expected_harvest_date];
+    const growing = soonestHarvest(a?.current ?? [], day);
+    if (growing) return [1, nextReady(growing, day)];
     if (a?.planned[0]) return [2, a.planned[0].planted_date];
     return [0, ""];
   };
@@ -173,11 +185,60 @@ function byHarvest(beds: Bed[], advice: Map<string, BedAdvice>): Bed[] {
 }
 
 function statusLine(planting: Planting, today: string): string {
-  if (planting.crop.toLowerCase().includes("tree")) return `${title(planting.crop)} since ${shortDate(planting.planted_date)}`;
+  if (isPerennial(planting.crop)) return `${title(planting.crop)} · ${perennialStatus(planting, today)}`;
   const until = daysBetween(today, planting.expected_harvest_date);
   if (until < 0) return `${title(planting.crop)} · past harvest date`;
   if (until === 0) return `${title(planting.crop)} · harvest today`;
   return `${title(planting.crop)} · harvest in ${until} day${until === 1 ? "" : "s"}`;
+}
+
+const N_LABEL: Record<NitrogenBalance["level"], string> = { low: "Low", balanced: "Balanced", rich: "Rich" };
+/** Ends of the meter; scores outside are pinned to the ends. */
+const N_MIN = -6;
+const N_MAX = 4;
+
+/** Soil nitrogen for a plot: a meter, what moved it, and what to plant about it. */
+function Nitrogen({ balance }: { balance: NitrogenBalance }) {
+  const at = (Math.min(N_MAX, Math.max(N_MIN, balance.score)) - N_MIN) / (N_MAX - N_MIN);
+  return (
+    <section className="block nitrogen">
+      <h3>
+        Soil nitrogen <span className={`n-level ${balance.level}`}>{N_LABEL[balance.level]}</span>
+      </h3>
+      <div
+        className="n-meter"
+        role="meter"
+        aria-label="Soil nitrogen"
+        aria-valuemin={N_MIN}
+        aria-valuemax={N_MAX}
+        aria-valuenow={balance.score}
+        aria-valuetext={N_LABEL[balance.level]}
+      >
+        <i style={{ left: `${at * 100}%` }} />
+      </div>
+      <p>{nitrogenReason(balance)}</p>
+      <p className="quiet small">{nitrogenTip(balance.level)} An estimate from what grew here, not a soil test.</p>
+    </section>
+  );
+}
+
+function permanentNote(crops: string[]): string {
+  const one = crops.length === 1;
+  return `${title(crops.join(" and "))} come${one ? "s" : ""} back every year, so this plot stays as it is: no rotation and no suggestions. Remove ${one ? "it" : "them"} to plan something new here.`;
+}
+
+/** Where a perennial is in its yearly harvest: "harvest season, until Sep 30", "first harvest Jul 2028", … */
+function perennialStatus(planting: Planting, day: string): string {
+  const season = harvestSeason(planting, day);
+  if (season.state === "none") return `perennial since ${shortDate(planting.planted_date, true)}`;
+  if (season.state === "now") return `harvest season, until ${shortDate(season.until)}`;
+  const wait = daysBetween(day, season.from);
+  if (season.first) {
+    const when = new Date(`${season.from}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+    return `first harvest ${when}`;
+  }
+  if (wait <= 60) return `harvest season in ${wait} day${wait === 1 ? "" : "s"}`;
+  return `harvest ${monthsLabel(perennialInfo(planting.crop)?.harvestMonths ?? [])} each year`;
 }
 
 function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
@@ -248,6 +309,8 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
         </ul>
       ) : null}
 
+      <Nitrogen balance={a.nitrogen} />
+
       <section className="block">
         <h3>{props.mode === "today" ? "Now growing" : `Growing on ${shortDate(data.today, true)}`}</h3>
         {a.current.length ? (
@@ -255,9 +318,13 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
             <div key={planting.id} className="growing">
               <Sprite crop={planting.crop} sprites={data.sprites} size={28} />
               <div>
-                <strong>{title(planting.crop)}</strong>
+                <strong>
+                  {title(planting.crop)}
+                  {isPerennial(planting.crop) ? <span className="perennial-tag">Perennial</span> : null}
+                </strong>
                 <small>
-                  Planted {shortDate(planting.planted_date)} · {statusLine(planting, data.today).split(" · ")[1] ?? "growing"}
+                  {isPerennial(planting.crop) ? `Since ${shortDate(planting.planted_date, true)}` : `Planted ${shortDate(planting.planted_date)}`} ·{" "}
+                  {statusLine(planting, data.today).split(" · ")[1] ?? "growing"}
                 </small>
                 {props.mode === "future" ? null : (
                   <small>
@@ -330,9 +397,32 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
         </section>
       ) : null}
 
-      {props.mode === "past" ? null : <GeminiIdeas {...props} bed={bed} occupant={occupant} />}
+      {props.mode !== "past" && a.permanent ? (
+        <section className="block">
+          <h3>Perennial plot</h3>
+          <p className="quiet small">
+            {permanentNote([...new Set(a.current.map((p) => p.crop))])}
+          </p>
+        </section>
+      ) : null}
 
       {props.mode === "past" ? null : (
+        <PlantSearch
+          bed={bed}
+          advice={a}
+          occupant={occupant}
+          future={props.mode === "future"}
+          thisYear={data.today.slice(0, 4)}
+          location={data.layout.location}
+          sprites={data.sprites}
+          busy={props.busy}
+          onPlan={props.onPlan}
+        />
+      )}
+
+      {props.mode === "past" || a.permanent ? null : <GeminiIdeas {...props} bed={bed} occupant={occupant} />}
+
+      {props.mode === "past" || a.permanent ? null : (
       <section className="block">
         <h3>
           {occupant ? `Add to this bed (free ${shortDate(a.freeFrom)})` : "Suggested for this bed"}

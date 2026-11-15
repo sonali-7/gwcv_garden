@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { spriteUrl } from "@/lib/pixel-sprites";
 import type { Occupant } from "@/lib/drop-plan";
+import { isPerennial } from "@/lib/perennials";
 
 function shortDate(day: string): string {
   return new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
@@ -37,6 +38,8 @@ export function DropChoice(props: {
   const names = props.there.map((o) => o.planting.crop);
   const what = [...new Set(names)].join(" and ");
   const several = props.there.length > 1;
+  // Perennials never clear out on their own, so "after" only makes sense if something annual is there.
+  const canAfter = !props.there.every((o) => isPerennial(o.planting.crop));
 
   return (
     <dialog ref={dialog} className="drop-dialog" onCancel={props.onCancel} onClose={props.onCancel} aria-labelledby="drop-title">
@@ -46,7 +49,8 @@ export function DropChoice(props: {
         {title(props.crop)} in {props.bedName}?
       </h2>
       <p className="drop-sub">
-        {props.bedName} has {what} in it. Replace {several ? "some of it" : "it"}, or plant {props.crop} after it or next to it?
+        {props.bedName} has {what} in it. Replace {several ? "some of it" : "it"}, or plant {props.crop}{" "}
+        {canAfter ? "after it or next to it" : `next to it (${what} ${several ? "are perennials" : "is a perennial"} and stay${several ? "" : "s"} put)`}?
       </p>
 
       <fieldset className="drop-pick">
@@ -83,10 +87,12 @@ export function DropChoice(props: {
           Replace{several && picked.size ? ` ${picked.size}` : ""}
           <small>{props.crop} from {shortDate(props.dates.replace)}</small>
         </button>
-        <button type="button" className="pill" disabled={props.busy} onClick={props.onAfter}>
-          Plant after
-          <small>from {shortDate(props.dates.after)}</small>
-        </button>
+        {canAfter ? (
+          <button type="button" className="pill" disabled={props.busy} onClick={props.onAfter}>
+            Plant after
+            <small>from {shortDate(props.dates.after)}</small>
+          </button>
+        ) : null}
         <button type="button" className="pill" disabled={props.busy} onClick={props.onAlongside}>
           Plant alongside
           <small>from {shortDate(props.dates.alongside)}</small>

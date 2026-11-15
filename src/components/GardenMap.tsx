@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { allowedMove, allowedResize } from "@/lib/bed-space";
 import { spriteDataUrl, spriteUrl, TILES } from "@/lib/pixel-sprites";
 import { fromFt, gridStepFt, showSize, toFt, type Units } from "@/lib/units";
+import { isPermanentPlot } from "@/lib/perennials";
 import { inGroundOn, plannedAfter } from "@/lib/plantings";
 import type { Bed, GardenLayout, Planting, Task } from "@/lib/types";
 
@@ -117,6 +118,12 @@ export function GardenMap(props: {
   const spritePx = Math.round(Math.min(44, Math.max(18, basePxPerFt * 2.5)) / 2) * 2;
 
   const beds = placed(props.beds, layout);
+  // Plots holding only perennials stay put year to year and look mulched.
+  const permanentIds = new Set(
+    props.beds
+      .filter((bed) => isPermanentPlot(props.plantings.filter((p) => p.bed_id === bed.id && inGroundOn(p, props.day, props.today))))
+      .map((bed) => bed.id),
+  );
   const legend = new Map<string, string>();
   for (const bed of beds) {
     for (const p of props.plantings) {
@@ -230,6 +237,12 @@ export function GardenMap(props: {
             <i className="swatch-planned" />
             planned
           </span>
+          {permanentIds.size ? (
+            <span>
+              <i className="swatch-perennial" />
+              perennial
+            </span>
+          ) : null}
         </div>
         </div>
         <div className="map-tools">
@@ -346,7 +359,7 @@ export function GardenMap(props: {
               aria-pressed={props.selectedId === bed.id}
               aria-label={`${bed.name}: ${cropText}`}
               title={`${bed.name}: ${cropText}`}
-              className={`bed ${state}${compact ? " compact" : ""}${props.selectedId === bed.id ? " selected" : ""}${dropId === bed.id ? " drop" : ""}`}
+              className={`bed ${state}${compact ? " compact" : ""}${permanentIds.has(bed.id) ? " perennial" : ""}${props.selectedId === bed.id ? " selected" : ""}${dropId === bed.id ? " drop" : ""}`}
               style={
                 {
                   left: `${(g.x / layout.widthFt) * 100}%`,

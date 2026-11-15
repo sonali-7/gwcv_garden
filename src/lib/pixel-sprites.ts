@@ -606,6 +606,19 @@ const BY_CROP: Record<string, string> = {
   herbs: "herb",
   mint: "herb",
   basil: "herb",
+  raspberry: "goldenberry",
+  blackberry: "goldenberry",
+  blueberry: "goldenberry",
+  strawberry: "goldenberry",
+  asparagus: "leafy",
+  rhubarb: "leafy",
+  rose: "flower",
+  lavender: "flower",
+  chives: "onion",
+  rosemary: "herb",
+  thyme: "herb",
+  oregano: "herb",
+  sage: "herb",
 };
 
 const BY_FAMILY: Record<string, string> = {
@@ -621,6 +634,10 @@ const BY_FAMILY: Record<string, string> = {
   cucurbit: "pumpkin",
   flower: "flower",
   herb: "herb",
+  rose: "goldenberry",
+  asparagus: "leafy",
+  knotweed: "leafy",
+  heath: "goldenberry",
 };
 
 export function spriteKey(crop: string | null | undefined): string {
