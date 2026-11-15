@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isPdf, pdfFirstPage } from "@/lib/pdf-page";
 import { canonicalCrop, knownCrops } from "@/lib/crops";
 import {
   boxDownscale,
@@ -91,8 +90,6 @@ export function SketchImport(props: {
   const [length, setLength] = useState(fromFt(props.layout.lengthFt, props.layout.units));
   const [lengthTouched, setLengthTouched] = useState(false);
   const [mode, setMode] = useState<"replace" | "add">("replace");
-  // "Using page 1 of 3 from the PDF", or "Opening the PDF…" while it's being drawn.
-  const [pdfNote, setPdfNote] = useState("");
   const [reading, setReading] = useState<"idle" | "busy" | "done" | "off">("idle");
   const [scaleNote, setScaleNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -115,7 +112,6 @@ export function SketchImport(props: {
     setRows([]);
     setReading("idle");
     setScaleNote("");
-    setPdfNote("");
     setError("");
     setLengthTouched(false);
     setUnits(props.layout.units);
@@ -169,26 +165,11 @@ export function SketchImport(props: {
     if (!file) return;
     reset();
     try {
-      // A PDF plan is drawn to an image first (page 1), then treated like a photo.
-      let source: Blob = file;
-      if (isPdf(file)) {
-        setPdfNote("Opening the PDF…");
-        const { image: page, pages } = await pdfFirstPage(file);
-        source = page;
-        setPdfNote(pages > 1 ? `Using page 1 of ${pages} from the PDF.` : "");
-      }
-      const image = await loadImage(source);
+      const image = await loadImage(file);
       setImg(image);
       setPreviewUrl(scaled(image, 1400).toDataURL("image/jpeg", 0.85));
     } catch (err) {
-      setPdfNote("");
-      setError(
-        isPdf(file)
-          ? "Couldn't open that PDF. If it's password-protected or damaged, export the plan as a PNG or JPG instead."
-          : err instanceof Error
-            ? err.message
-            : "Couldn't open that image.",
-      );
+      setError(err instanceof Error ? err.message : "Couldn't open that image.");
     }
   }
 
@@ -422,7 +403,7 @@ export function SketchImport(props: {
           </svg>
           <div>
             <p>
-              <strong>Drop in a drawing or diagram of the garden:</strong> a photo of a sketch, an image from a drawing app, or a PDF.
+              <strong>Drop in a drawing or diagram of the garden:</strong> a photo of a sketch, or an image from a drawing app.
             </p>
             <ul>
               <li>Draw each bed as a closed box, or a solid block of color.</li>
@@ -445,7 +426,7 @@ export function SketchImport(props: {
             <input
               ref={fileInput}
               type="file"
-              accept="image/*,application/pdf,.pdf"
+              accept="image/*"
               className="sr"
               onChange={(event) => {
                 void pick(event.target.files?.[0]);
@@ -529,7 +510,7 @@ export function SketchImport(props: {
               <input
                 ref={fileInput}
                 type="file"
-                accept="image/*,application/pdf,.pdf"
+                accept="image/*"
                 className="sr"
                 onChange={(event) => {
                   void pick(event.target.files?.[0]);
@@ -676,7 +657,6 @@ export function SketchImport(props: {
                 archived: off the map, history kept.
               </small>
             </fieldset>
-            {pdfNote ? <p className="sketch-note">{pdfNote}</p> : null}
             {error ? <p className="banner">{error}</p> : null}
             <button
               type="button"
@@ -689,7 +669,6 @@ export function SketchImport(props: {
           </div>
         </div>
       )}
-      {!img && pdfNote ? <p className="sketch-note">{pdfNote}</p> : null}
       {!img && error ? <p className="banner">{error}</p> : null}
     </dialog>
   );
