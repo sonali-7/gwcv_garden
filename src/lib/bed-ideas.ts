@@ -1,4 +1,5 @@
 import { CROP_FAMILIES, canonicalCrop, familyOf } from "./crops";
+import { nitrogenReason } from "./nitrogen";
 import { inGroundOn, plannedAfter } from "./plantings";
 import { adviseBed, guideFor, monthName, nextSowDate } from "./recommend";
 import { addDays } from "./time";
@@ -30,6 +31,8 @@ export type IdeaContext = {
   grew_here_recently: string[];
   avoid_families: string[];
   next_to_this_bed: string[];
+  /** "low", "balanced" or "rich", from what grew here, with the reason. */
+  soil_nitrogen: string;
 };
 
 const FAMILY_NAMES = CROP_FAMILIES.map((family) => family.family);
@@ -75,6 +78,7 @@ export function ideaContext(bed: Bed, beds: Bed[], plantings: Planting[], layout
     grew_here_recently: advice.history.filter((p) => p.season_year >= year - 2).map((p) => `${p.crop} (${p.season_year})`).slice(0, 8),
     avoid_families: [...new Set(advice.avoid.map((item) => familyOf(item.crop)?.family).filter((f): f is string => Boolean(f)))],
     next_to_this_bed: [...new Set(neighbors.flatMap((other) => cropsOn(other.id, plantings, day, today)))].slice(0, 12),
+    soil_nitrogen: `${advice.nitrogen.level}: ${nitrogenReason(advice.nitrogen)}`,
   };
 }
 
@@ -87,6 +91,7 @@ export function ideaPrompt(context: IdeaContext): string {
     "- right for that month and season where the garden is (flip the season if the location is in the southern hemisphere);",
     "- good neighbors for what's in this bed and the beds next to it (companion planting);",
     "- not from any family in avoid_families (crop rotation);",
+    "- if soil_nitrogen is low, favor nitrogen fixers (beans, peas, clover) and avoid heavy feeders; if it's rich, heavy feeders do well;",
     "- easy for volunteers to find as seeds or starts at a local garden center.",
     "",
     "For each crop give:",

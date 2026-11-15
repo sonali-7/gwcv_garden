@@ -85,7 +85,8 @@
       "onion",
       "onions",
       "leeks",
-      "leek"
+      "leek",
+      "chives"
     ],
     "nitrogenFixer": false,
     "feeder": "light"
@@ -136,7 +137,8 @@
       "thyme",
       "oregano",
       "sage",
-      "lemon balm"
+      "lemon balm",
+      "lavender"
     ],
     "nitrogenFixer": false,
     "feeder": "light"
@@ -146,6 +148,46 @@
     "crops": [
       "tree",
       "trees"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "light"
+  },
+  {
+    "family": "rose",
+    "crops": [
+      "raspberry",
+      "raspberries",
+      "blackberry",
+      "blackberries",
+      "strawberry",
+      "strawberries",
+      "rose",
+      "roses"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "medium"
+  },
+  {
+    "family": "asparagus",
+    "crops": [
+      "asparagus"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "heavy"
+  },
+  {
+    "family": "knotweed",
+    "crops": [
+      "rhubarb"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "heavy"
+  },
+  {
+    "family": "heath",
+    "crops": [
+      "blueberry",
+      "blueberries"
     ],
     "nitrogenFixer": false,
     "feeder": "light"

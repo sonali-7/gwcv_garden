@@ -595,13 +595,14 @@ async function commit(
     const existing = plantings.find(
       (item) => item.bed_id === bed.id && item.crop.toLowerCase() === crop.toLowerCase() && isActive(item, interval.day),
     );
+    // A plan from the garden view for this crop and bed: one made for later, or an unconfirmed one whose date passed.
     const plannedPlanting = plantings.find(
       (item) =>
         item.bed_id === bed.id &&
         item.crop.toLowerCase() === crop.toLowerCase() &&
-        item.planted_date > interval.day &&
         !item.removed_date &&
-        !item.source_session_id,
+        !item.source_session_id &&
+        (item.status === "planned" || item.planted_date > interval.day),
     );
     if (existing) {
       plantingId = existing.id;
@@ -613,6 +614,7 @@ async function commit(
         expected_harvest_date: addDays(interval.day, plannedPlanting.days_to_maturity),
         season_year: Number(interval.day.slice(0, 4)),
         source_session_id: session.id,
+        status: "planted",
       });
       plantingId = plannedPlanting.id;
     } else {

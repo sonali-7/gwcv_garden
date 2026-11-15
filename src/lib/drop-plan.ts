@@ -1,4 +1,4 @@
-import { inGroundOn, plannedAfter } from "./plantings";
+import { inGroundOn, isPlan, plannedAfter } from "./plantings";
 import { nextSowDate } from "./recommend";
 import { addDays } from "./time";
 import type { Planting } from "./types";
@@ -16,7 +16,7 @@ export type DropSituation = { kind: "empty" } | { kind: "replace"; old: Planting
 
 /** In the ground at least one full day before `day`. */
 export function isEstablished(planting: Planting, day: string): boolean {
-  return planting.planted_date < day;
+  return !isPlan(planting) && planting.planted_date < day;
 }
 
 /** What the patch shows on `day`: what's growing, or else everything planned for its next planting date. */
@@ -37,7 +37,7 @@ export function dropSituation(bedId: string, plantings: Planting[], day: string,
 
 /** Plans that haven't started and didn't come from a text can be deleted outright (the server enforces the same rule). */
 export function canDelete(planting: Planting, today: string): boolean {
-  return planting.planted_date > today && !planting.source_session_id;
+  return isPlan(planting) || (planting.planted_date > today && !planting.source_session_id);
 }
 
 /**

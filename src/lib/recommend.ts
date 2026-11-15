@@ -1,5 +1,7 @@
 import guide from "../data/crop-guide.json";
 import { canonicalCrop, familyOf } from "./crops";
+import { nitrogenBalance, type NitrogenBalance } from "./nitrogen";
+import { isPerennial, isPermanentPlot } from "./perennials";
 import { inGroundOn, plannedAfter } from "./plantings";
 import { addDays } from "./time";
 import type { Bed, Planting } from "./types";
@@ -44,6 +46,10 @@ export type BedAdvice = {
   history: Planting[];
   recommendations: Recommendation[];
   avoid: Avoid[];
+  /** Rough nitrogen balance from what grew here (see nitrogen.ts). */
+  nitrogen: NitrogenBalance;
+  /** Only perennials in the ground: the plot stays as it is, so there are no suggestions or rotation. */
+  permanent: boolean;
 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -77,7 +83,9 @@ export function nextSowDate(from: string, months: number[]): string {
  * - never repeat a family grown here this season or last season (crop rotation)
  * - discourage a family grown two seasons ago
  * - follow a heavy feeder with a nitrogen fixer, and a nitrogen fixer with a heavy feeder
+ * - otherwise, if the plot's nitrogen is low, favor fixers over heavy feeders (and the other way round if it's rich)
  * - prefer crops whose sowing window is open once the bed is free
+ * - perennials don't rotate, and a plot holding only perennials gets no suggestions
  * `day` is the date being looked at (the garden timeline can move it); `today` is the real date.
  */
 export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = day): BedAdvice {
@@ -90,14 +98,15 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
   const mine = all.filter((planting) => planting.planted_date <= day || planned.includes(planting));
   const history = mine.filter((planting) => !current.includes(planting) && !planned.includes(planting)).reverse();
 
-  const lastPlanted = [...current, ...planned].map((planting) => planting.expected_harvest_date).sort().at(-1);
+  // Perennials never free their space, so only annuals decide when the rest of the plot opens up.
+  const lastPlanted = [...current, ...planned].filter((planting) => !isPerennial(planting.crop)).map((planting) => planting.expected_harvest_date).sort().at(-1);
   const freeFrom = lastPlanted && lastPlanted > day ? addDays(lastPlanted, 1) : day;
   const year = Number(day.slice(0, 4));
 
   const recentFamilies = new Map<string, Planting>();
   const olderFamilies = new Map<string, Planting>();
   for (const planting of mine) {
-    if (planting.crop.toLowerCase().includes("tree")) continue;
+    if (isPerennial(planting.crop)) continue;
     const family = familyOf(planting.crop)?.family;
     if (!family) continue;
     if (planting.season_year >= year - 1) recentFamilies.set(family, planting);
@@ -105,9 +114,12 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
   }
 
   const previous = [...mine]
-    .filter((planting) => planting.planted_date <= day && !planting.crop.toLowerCase().includes("tree"))
+    .filter((planting) => planting.planted_date <= day && !isPerennial(planting.crop))
     .at(-1);
   const previousFamily = previous ? familyOf(previous.crop) : null;
+  const nitrogen = nitrogenBalance(all, day, today);
+  const permanent = isPermanentPlot(current);
+  if (permanent) return { bedId: bed.id, freeFrom, current, planned, history, recommendations: [], avoid: [], nitrogen, permanent };
 
   const recommendations: Recommendation[] = [];
   // Nothing new goes in before tomorrow (or before the date being looked at, if that's later).
@@ -144,6 +156,19 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
       } else if (previousFamily.feeder === "heavy" && family.feeder === "light") {
         score += 1;
         reasons.push(`A light feeder gives the soil a rest after ${previous.crop}.`);
+      }
+    }
+    // The last crop says nothing either way: go by the plot's overall balance.
+    if (reasons.length === (older && !item.cover ? 1 : 0)) {
+      if (nitrogen.level === "low" && family.nitrogenFixer) {
+        score += 2;
+        reasons.push("This plot is low on nitrogen; this puts it back.");
+      } else if (nitrogen.level === "low" && family.feeder === "heavy") {
+        score -= 1;
+        reasons.push("This plot is low on nitrogen, which a heavy feeder needs.");
+      } else if (nitrogen.level === "rich" && family.feeder === "heavy") {
+        score += 1;
+        reasons.push("Makes good use of the nitrogen built up here.");
       }
     }
 
@@ -184,7 +209,7 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
   }
 
   recommendations.sort((a, b) => b.score - a.score || a.soonest.localeCompare(b.soonest) || a.crop.localeCompare(b.crop));
-  return { bedId: bed.id, freeFrom, current, planned, history, recommendations, avoid };
+  return { bedId: bed.id, freeFrom, current, planned, history, recommendations, avoid, nitrogen, permanent };
 }
 
 function titleCase(text: string): string {
