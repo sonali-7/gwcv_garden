@@ -65,3 +65,8 @@ function describe(crop: string, advice: BedAdvice): SearchHit {
     perennial,
   };
 }
+
+/** Forget the cached name list, after the app learns a new crop. */
+export function resetSearchList(): void {
+  cached = null;
+}

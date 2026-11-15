@@ -1,4 +1,5 @@
 import { getStore } from "@/lib/db";
+import { cleanAreas, cleanPoints, selfCrossing } from "@/lib/garden-areas";
 import { json, noContent } from "@/lib/http";
 import { saveDataUrl } from "@/lib/media";
 
@@ -27,6 +28,18 @@ export async function PUT(request: Request) {
   if ("lengthFt" in body) next.lengthFt = size(body.lengthFt, layout.lengthFt);
   if (body.units === "ft" || body.units === "m") next.units = body.units;
   if (body.outline === null) next.outline = null;
+  // A reshaped garden edge (corners dragged in Edit layout).
+  if (Array.isArray(body.outline)) {
+    const points = cleanPoints(body.outline, next.widthFt, next.lengthFt);
+    if (!points || selfCrossing(points)) return json({ error: "That shape crosses itself. Move the corners apart." }, 400);
+    next.outline = points;
+  }
+  // Growing areas (see garden-areas.ts); an empty list or null goes back to a single garden.
+  if ("areas" in body) {
+    const areas = cleanAreas(body.areas, next.widthFt, next.lengthFt);
+    if (areas) next.areas = areas;
+    else delete next.areas;
+  }
   if (typeof body.location === "string") next.location = body.location.replace(/\s+/g, " ").trim().slice(0, 80);
   if (body.imageDataUrl === null) next.imageUrl = null;
   if (typeof body.imageDataUrl === "string") {

@@ -4,7 +4,7 @@ import { spriteFileKey } from "./pixel-sprites";
 import { reconcilePriorityTasks } from "./planner";
 import type { Store } from "./store";
 import { gardenTz, todayYmd } from "./time";
-import { toPublicPerson, type Bed, type GardenLayout, type Photo, type Planting, type PublicPerson, type Task, type WorkSession } from "./types";
+import { toPublicPerson, type Bed, type CropProfile, type GardenLayout, type Photo, type Planting, type PublicPerson, type Task, type WorkSession } from "./types";
 
 export type GardenData = {
   today: string;
@@ -18,6 +18,8 @@ export type GardenData = {
   tasks: Task[];
   /** Drawings dropped into public/sprites, keyed by crop or sprite name. */
   sprites: Record<string, string>;
+  /** Plants looked up with Gemini; the browser adds them to its crop tables too. */
+  cropProfiles: CropProfile[];
 };
 
 async function customSprites(): Promise<Record<string, string>> {
@@ -38,7 +40,7 @@ export async function loadGarden(store: Store, now = new Date()): Promise<Garden
   const timeZone = gardenTz();
   // Same reconcile as the calendar so map markers and the priority list share one source of truth.
   const tasks = await reconcilePriorityTasks(store, now);
-  const [sprites, layout, people, beds, plantings, sessions, photos] = await Promise.all([
+  const [sprites, layout, people, beds, plantings, sessions, photos, cropProfiles] = await Promise.all([
     customSprites(),
     store.getLayout(),
     store.listPeople(),
@@ -46,6 +48,7 @@ export async function loadGarden(store: Store, now = new Date()): Promise<Garden
     store.listPlantings(),
     store.listSessions(),
     store.listPhotos(),
+    store.listCropProfiles(),
   ]);
   return {
     today: todayYmd(now, timeZone),
@@ -58,5 +61,6 @@ export async function loadGarden(store: Store, now = new Date()): Promise<Garden
     photos,
     tasks,
     sprites,
+    cropProfiles,
   };
 }
