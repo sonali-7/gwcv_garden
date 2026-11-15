@@ -330,6 +330,8 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
         </section>
       ) : null}
 
+      {props.mode === "past" ? null : <GeminiIdeas {...props} bed={bed} occupant={occupant} />}
+
       {props.mode === "past" ? null : (
       <section className="block">
         <h3>
@@ -428,8 +430,6 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
         ) : null}
       </section>
       )}
-
-      {props.mode === "past" ? null : <GeminiIdeas {...props} bed={bed} occupant={occupant} />}
 
       {a.history.length ? (
         <section className="block">
