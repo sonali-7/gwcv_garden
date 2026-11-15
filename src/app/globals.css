@@ -2865,3 +2865,87 @@ h1 {
 .search-none p {
   margin: 0 0 6px;
 }
+
+/* Sustainability score at the top of the plant list. */
+.eco-card {
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--ink-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--green) 7%, var(--card));
+}
+.eco-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.eco-head h3 {
+  margin: 0;
+}
+.eco-head p {
+  margin: 2px 0 0;
+}
+.eco-score {
+  flex: 0 0 auto;
+  font-size: 1.9rem;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--green);
+}
+.eco-score small {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.eco-change {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.eco-change.up {
+  color: var(--green);
+}
+.eco-change.down {
+  color: #9a5a0c;
+}
+.eco-reasons {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.82rem;
+}
+.eco-reasons li + li {
+  margin-top: 2px;
+}
+.eco-more {
+  margin-top: 8px;
+  font-size: 0.82rem;
+}
+.eco-more summary {
+  cursor: pointer;
+  color: var(--green);
+  font-weight: 600;
+}
+.eco-more dl {
+  margin: 8px 0;
+  display: grid;
+  gap: 4px;
+}
+.eco-more dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.eco-more dt {
+  color: var(--muted);
+}
+.eco-more dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 700;
+}
+.eco-more dd small {
+  font-weight: 400;
+  color: var(--muted);
+}
+.eco-more dd .detail {
+  display: block;
+}

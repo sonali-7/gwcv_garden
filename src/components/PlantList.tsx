@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CROP_MIME } from "@/components/GardenMap";
 import { PlantSearch } from "@/components/PlantSearch";
+import { SustainabilityCard } from "@/components/SustainabilityCard";
 import { spriteUrl } from "@/lib/pixel-sprites";
 import type { BedIdea } from "@/lib/bed-ideas";
 import type { GardenData } from "@/lib/garden-data";
@@ -93,6 +94,7 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
             ? `What will be in each bed on ${shortDate(data.today, true)}, and ideas for the open spots.`
             : "What's in each bed, and ideas for open spots based on rotation and the season."}
       </p>
+      <SustainabilityCard beds={data.beds} plantings={data.plantings} day={data.today} today={props.realToday} />
       {open.length && props.mode !== "past" ? (
         <div className="open-spots">
           {open.map((bed) => {
