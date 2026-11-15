@@ -1,5 +1,6 @@
 import guide from "../data/crop-guide.json";
 import { canonicalCrop, familyOf } from "./crops";
+import { nitrogenBalance, type NitrogenBalance } from "./nitrogen";
 import { inGroundOn, plannedAfter } from "./plantings";
 import { addDays } from "./time";
 import type { Bed, Planting } from "./types";
@@ -44,6 +45,8 @@ export type BedAdvice = {
   history: Planting[];
   recommendations: Recommendation[];
   avoid: Avoid[];
+  /** Rough nitrogen balance from what grew here (see nitrogen.ts). */
+  nitrogen: NitrogenBalance;
 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -77,6 +80,7 @@ export function nextSowDate(from: string, months: number[]): string {
  * - never repeat a family grown here this season or last season (crop rotation)
  * - discourage a family grown two seasons ago
  * - follow a heavy feeder with a nitrogen fixer, and a nitrogen fixer with a heavy feeder
+ * - otherwise, if the plot's nitrogen is low, favor fixers over heavy feeders (and the other way round if it's rich)
  * - prefer crops whose sowing window is open once the bed is free
  * `day` is the date being looked at (the garden timeline can move it); `today` is the real date.
  */
@@ -108,6 +112,7 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
     .filter((planting) => planting.planted_date <= day && !planting.crop.toLowerCase().includes("tree"))
     .at(-1);
   const previousFamily = previous ? familyOf(previous.crop) : null;
+  const nitrogen = nitrogenBalance(all, day, today);
 
   const recommendations: Recommendation[] = [];
   // Nothing new goes in before tomorrow (or before the date being looked at, if that's later).
@@ -144,6 +149,19 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
       } else if (previousFamily.feeder === "heavy" && family.feeder === "light") {
         score += 1;
         reasons.push(`A light feeder gives the soil a rest after ${previous.crop}.`);
+      }
+    }
+    // The last crop says nothing either way: go by the plot's overall balance.
+    if (reasons.length === (older && !item.cover ? 1 : 0)) {
+      if (nitrogen.level === "low" && family.nitrogenFixer) {
+        score += 2;
+        reasons.push("This plot is low on nitrogen; this puts it back.");
+      } else if (nitrogen.level === "low" && family.feeder === "heavy") {
+        score -= 1;
+        reasons.push("This plot is low on nitrogen, which a heavy feeder needs.");
+      } else if (nitrogen.level === "rich" && family.feeder === "heavy") {
+        score += 1;
+        reasons.push("Makes good use of the nitrogen built up here.");
       }
     }
 
@@ -184,7 +202,7 @@ export function adviseBed(bed: Bed, plantings: Planting[], day: string, today = 
   }
 
   recommendations.sort((a, b) => b.score - a.score || a.soonest.localeCompare(b.soonest) || a.crop.localeCompare(b.crop));
-  return { bedId: bed.id, freeFrom, current, planned, history, recommendations, avoid };
+  return { bedId: bed.id, freeFrom, current, planned, history, recommendations, avoid, nitrogen };
 }
 
 function titleCase(text: string): string {

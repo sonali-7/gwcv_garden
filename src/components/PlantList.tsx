@@ -5,6 +5,7 @@ import { CROP_MIME } from "@/components/GardenMap";
 import { spriteUrl } from "@/lib/pixel-sprites";
 import type { BedIdea } from "@/lib/bed-ideas";
 import type { GardenData } from "@/lib/garden-data";
+import { nitrogenReason, nitrogenTip, type NitrogenBalance } from "@/lib/nitrogen";
 import type { BedAdvice, Recommendation } from "@/lib/recommend";
 import type { Bed, Planting } from "@/lib/types";
 import { showArea, showSize } from "@/lib/units";
@@ -127,7 +128,14 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
                   <i className="hollow" />
                 )}
                 <span>
-                  <strong>{bed.name}</strong>
+                  <strong>
+                    {bed.name}
+                    {a?.nitrogen.level === "low" ? (
+                      <span className="n-flag" title="Low on nitrogen: try beans, peas or clover next">
+                        Low N
+                      </span>
+                    ) : null}
+                  </strong>
                   <small>
                     {now
                       ? statusLine(now, data.today) + (others.length ? ` · also ${others.join(", ")}` : "")
@@ -178,6 +186,36 @@ function statusLine(planting: Planting, today: string): string {
   if (until < 0) return `${title(planting.crop)} · past harvest date`;
   if (until === 0) return `${title(planting.crop)} · harvest today`;
   return `${title(planting.crop)} · harvest in ${until} day${until === 1 ? "" : "s"}`;
+}
+
+const N_LABEL: Record<NitrogenBalance["level"], string> = { low: "Low", balanced: "Balanced", rich: "Rich" };
+/** Ends of the meter; scores outside are pinned to the ends. */
+const N_MIN = -6;
+const N_MAX = 4;
+
+/** Soil nitrogen for a plot: a meter, what moved it, and what to plant about it. */
+function Nitrogen({ balance }: { balance: NitrogenBalance }) {
+  const at = (Math.min(N_MAX, Math.max(N_MIN, balance.score)) - N_MIN) / (N_MAX - N_MIN);
+  return (
+    <section className="block nitrogen">
+      <h3>
+        Soil nitrogen <span className={`n-level ${balance.level}`}>{N_LABEL[balance.level]}</span>
+      </h3>
+      <div
+        className="n-meter"
+        role="meter"
+        aria-label="Soil nitrogen"
+        aria-valuemin={N_MIN}
+        aria-valuemax={N_MAX}
+        aria-valuenow={balance.score}
+        aria-valuetext={N_LABEL[balance.level]}
+      >
+        <i style={{ left: `${at * 100}%` }} />
+      </div>
+      <p>{nitrogenReason(balance)}</p>
+      <p className="quiet small">{nitrogenTip(balance.level)} An estimate from what grew here, not a soil test.</p>
+    </section>
+  );
 }
 
 function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
@@ -247,6 +285,8 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
           ))}
         </ul>
       ) : null}
+
+      <Nitrogen balance={a.nitrogen} />
 
       <section className="block">
         <h3>{props.mode === "today" ? "Now growing" : `Growing on ${shortDate(data.today, true)}`}</h3>

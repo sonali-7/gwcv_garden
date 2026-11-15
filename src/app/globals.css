@@ -2706,3 +2706,57 @@ h1 {
 .plan-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; }
 .pill.small { padding: 3px 10px; font-size: 12.5px; }
 .growing.overdue small em { font-style: normal; color: #b0631a; font-weight: 600; }
+
+/* Soil nitrogen in the plot panel: a low-to-rich meter with a marker. */
+.nitrogen h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.n-level {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: #fff;
+}
+.n-level.low {
+  background: var(--orange);
+}
+.n-level.balanced {
+  background: var(--olive);
+}
+.n-level.rich {
+  background: var(--green);
+}
+.n-meter {
+  position: relative;
+  height: 8px;
+  margin: 6px 0 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--orange), var(--olive) 55%, var(--green));
+}
+.n-meter i {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 3px solid var(--ink);
+  transform: translate(-50%, -50%);
+}
+.nitrogen p {
+  margin: 4px 0 0;
+  font-size: 0.86rem;
+}
+.n-flag {
+  margin-left: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--orange) 18%, transparent);
+  color: #9a5a0c;
+  vertical-align: 1px;
+}
