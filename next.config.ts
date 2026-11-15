@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  serverExternalPackages: ["mongodb"],
+  serverExternalPackages: ["mongodb", "deepagents", "@langchain/google", "@langchain/core", "@langchain/langgraph", "langchain"],
   async headers() {
     return [
       {

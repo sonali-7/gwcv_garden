@@ -28,6 +28,17 @@ const ACTIVITIES: Array<[RegExp, ActivityType]> = [
 
 const WEEKDAY_WORDS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
+/** Common typos / short forms → weekday index. */
+const WEEKDAY_ALIASES: Array<[RegExp, number]> = [
+  [/\b(sun|sundays?)\b/, 0],
+  [/\b(mon|mondays?)\b/, 1],
+  [/\b(tue|tues|tuesdays?)\b/, 2],
+  [/\b(wed|wednesdays?)\b/, 3],
+  [/\b(thu|thur|thurs|thursdays?|thursdya|thurdsay)\b/, 4],
+  [/\b(fri|fridays?)\b/, 5],
+  [/\b(sat|saturdays?)\b/, 6],
+];
+
 export const EMERGENCY_REPLY =
   "If someone is hurt or this is an emergency, call 911 now. I can't help with emergencies.";
 
@@ -198,12 +209,30 @@ export function parseMessage(text: string): ParsedMessage {
       hint: trimmed.replace(CLAIM_PREFIX, "").trim(),
     };
   }
-  if (/^\s*edit\b/i.test(trimmed)) {
-    return { kind: "edit", instruction: trimmed.replace(/^\s*edit\b[:\s-]*/i, "").trim() };
+  if (isEditText(trimmed)) {
+    return { kind: "edit", instruction: editInstruction(trimmed) };
   }
   const draft = parseDraft(trimmed);
   if (!draft?.activity) return { kind: "unknown" };
   return { kind: "session", draft };
+}
+
+/** "edit …", "update to 11/26", "reschedule to Thursday", "move to 2pm". */
+export function isEditText(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  if (!lower) return false;
+  if (/^(edit|update|reschedule|change|move)\b/.test(lower)) return true;
+  if (/^(can you |please )?(update|change|move|reschedule)\b/.test(lower)) return true;
+  return false;
+}
+
+export function editInstruction(text: string): string {
+  const trimmed = text.trim();
+  const stripped = trimmed.replace(
+    /^(?:can you |please )?(?:edit|update|reschedule|change|move)(?:\s+(?:it|this|that|my(?:\s+\w+)?))?(?:\s+(?:to|for|on))?\b[:\s-]*/i,
+    "",
+  ).trim();
+  return stripped || trimmed;
 }
 
 function isPlanQuery(text: string): boolean {
@@ -297,7 +326,37 @@ export function textHasDay(text: string): boolean {
   const lower = text.toLowerCase();
   if (/\b(today|yesterday|tomorrow)\b/.test(lower)) return true;
   if (WEEKDAY_WORDS.some((word) => new RegExp(`\\b${word}\\b`).test(lower))) return true;
+  // Typos / short forms ("Thursdya", "thur") — so Gemini's weekday isn't wiped in mergeDrafts.
+  if (WEEKDAY_ALIASES.some(([pattern]) => pattern.test(lower))) return true;
+  if (fuzzyWeekdayMention(lower)) return true;
   return findExplicitDate(lower) != null;
+}
+
+/** Catch misspellings like "Thrursday" that aren't in the alias list. */
+function fuzzyWeekdayMention(lower: string): boolean {
+  const tokens = lower.match(/[a-z]{4,}/g) ?? [];
+  for (const token of tokens) {
+    for (const day of WEEKDAY_WORDS) {
+      if (editDistance(token, day) <= 2) return true;
+    }
+  }
+  return false;
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > 2) return 99;
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    let prior = prev[0]!;
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const next = a[i - 1] === b[j - 1] ? prior : Math.min(prior, prev[j]!, prev[j - 1]!) + 1;
+      prior = prev[j]!;
+      prev[j] = next;
+    }
+  }
+  return prev[b.length]!;
 }
 
 export function applyClarification(
@@ -435,7 +494,13 @@ export function cleanName(text: string): string | null {
   if (!/^[A-Za-z][A-Za-z'’. -]{0,40}$/.test(trimmed)) return null;
   const words = trimmed.split(/\s+/);
   if (words.length === 0 || words.length > 3) return null;
-  if (words.some((word) => /^(undo|edit|yes|no|am|pm|morning|afternoon|evening|the|row|today|yesterday)$/i.test(word))) {
+  if (
+    words.some((word) =>
+      /^(undo|edit|yes|no|am|pm|morning|afternoon|evening|the|row|today|yesterday|schedule|scheduled|visit|coming|come)$/i.test(
+        word,
+      ),
+    )
+  ) {
     return null;
   }
   if (parseDraft(trimmed)?.activity) return null;
@@ -465,6 +530,9 @@ function isWaterQuery(text: string): boolean {
 }
 
 function findActivity(lower: string): ActivityType | null {
+  // "I'll come in Thursday" / "schedule me next week" = a calendar visit, not planting.
+  if (isVisitIntent(lower)) return "other";
+
   let best: { index: number; activity: ActivityType } | null = null;
   for (const [pattern, activity] of ACTIVITIES) {
     const match = pattern.exec(lower);
@@ -473,8 +541,38 @@ function findActivity(lower: string): ActivityType | null {
     }
   }
   if (best) return best.activity;
+  // "schedule kumquats" still means plant; "schedule me" is handled above as a visit.
   if (/\bschedule(?:d|ing)?\b/.test(lower) && !isScheduleQuery(lower)) return "plant";
   return null;
+}
+
+/** Putting yourself on the calendar without naming a chore/crop. */
+export function isVisitIntent(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (isScheduleQuery(lower)) return false;
+  if (/\b(meeting|met)\b/.test(lower)) return false;
+  // An explicit crop chore wins over visit wording.
+  if (/\b(planted|planting|plant|sowed|sow|weeded|weeding|weed|watered|watering|harvested|harvest|mulched|tilled|prepped)\b/.test(lower)) {
+    return false;
+  }
+  if (/\bschedule(?:d|ing)?\s+(?:me|myself|us)\b/.test(lower)) return true;
+  if (/\b(?:put|add)\s+me\s+on\s+(?:the\s+)?(?:calendar|schedule)\b/.test(lower)) return true;
+  if (/\b(?:i(?:'m| am)?|we(?:'re| are)?)\s+(?:gonna|going to|will)\s+come\b/.test(lower)) return true;
+  if (/\bi(?:'ll| will)\s+come\b/.test(lower)) return true;
+  if (/\bcoming\s+in\b/.test(lower)) return true;
+  if (/\b(?:stop|swing)\s+by\b/.test(lower)) return true;
+  if (/\bi(?:'ll| will)\s+be\s+(?:there|at the garden|in)\b/.test(lower)) return true;
+  if (/\bschedule(?:d|ing)?\s+me\b/.test(lower)) return true;
+  // "schedule next week Thursday 12-3" with no crop → visit.
+  if (
+    /\bschedule(?:d|ing)?\b/.test(lower) &&
+    !isScheduleQuery(lower) &&
+    !findCropAfterSchedule(lower) &&
+    (findWeekdays(lower).weekdays.length > 0 || /\bnext\s+week\b/.test(lower) || /\btomorrow\b/.test(lower))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function findRange(lower: string): {
@@ -527,13 +625,21 @@ function findDuration(lower: string): number | null {
 
 function findWeekdays(lower: string): { weekdays: number[]; nextWeek: boolean } {
   const weekdays: number[] = [];
-  let nextWeek = false;
+  let nextWeek = /\bnext\s+week\b/.test(lower);
   const pattern = new RegExp(`\\b(next\\s+)?(${WEEKDAY_WORDS.join("|")})\\b`, "g");
   for (const match of lower.matchAll(pattern)) {
     if (match[1]) nextWeek = true;
     const index = WEEKDAY_WORDS.indexOf(match[2]);
     if (index >= 0 && !weekdays.includes(index)) weekdays.push(index);
   }
+  // Typos / short forms when a full weekday word wasn't found.
+  if (weekdays.length === 0) {
+    for (const [patternAlias, index] of WEEKDAY_ALIASES) {
+      if (patternAlias.test(lower) && !weekdays.includes(index)) weekdays.push(index);
+    }
+  }
+  // "next week on Thursday" already sets nextWeek; "next Thursdya" via alias + next.
+  if (/\bnext\s+(?:week\s+on\s+)?(?:sun|mon|tue|wed|thu|fri|sat)/.test(lower)) nextWeek = true;
   return { weekdays, nextWeek };
 }
 
@@ -548,6 +654,7 @@ function findDaypart(lower: string): "am" | "pm" | null {
 }
 
 function findCrop(lower: string): string | null {
+  if (isVisitIntent(lower)) return null;
   for (const crop of knownCrops()) {
     if (includesPhrase(lower, crop)) return canonicalCrop(crop);
   }
@@ -558,10 +665,17 @@ function findCrop(lower: string): string | null {
     const phrase = cleanCropPhrase(filledWith[1]);
     if (phrase) return canonicalCrop(phrase);
   }
+  return findCropAfterSchedule(lower);
+}
+
+/** Crop named after "schedule …" — not "schedule me". */
+function findCropAfterSchedule(lower: string): string | null {
   const planted = lower.match(
     /\b(?:planted|planting|sowed|sow|schedule(?:d|ing)?)\s+(?:some\s+)?([a-z][a-z ]{1,32}?)(?:\s+in\b|\s+on\b|\s+at\b|\s+for\b|\s+from\b|\s+today\b|\s+yesterday\b|$)/,
   );
   if (!planted) return null;
+  const raw = planted[1].trim().toLowerCase();
+  if (/^(me|myself|us|my|our)\b/.test(raw)) return null;
   const phrase = cleanCropPhrase(planted[1]);
   if (!phrase || phrase.length < 3) return null;
   return canonicalCrop(phrase);

@@ -6,6 +6,7 @@ import { activePlantings, isActive } from "./plantings";
 import { planPhrase, sentence, workPhrase } from "./phrases";
 import {
   applyClarification,
+  calendarDate,
   cleanName,
   EMERGENCY_REPLY,
   helpForTimeField,
@@ -40,6 +41,7 @@ import {
   todayYmd,
   to24,
   whenPhrase,
+  ymd,
   zonedToUtc,
 } from "./time";
 import type {
@@ -888,32 +890,57 @@ async function edit(
   say: (line: string) => Promise<void>,
 ): Promise<WorkSession | null> {
   if (!instruction) {
-    await say("What should I change — the time, the row, or the notes?");
+    await say("What should I change — the date, the time, the row, or the notes?");
     return null;
   }
   const sessions = (await store.listSessions())
     .filter((session) => session.person_id === person.id)
     .sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime());
-  const session = sessions[0];
+  // Prefer the latest upcoming plan when they're rescheduling ("update to 11/26").
+  const upcoming = sessions.find((session) => new Date(session.start).getTime() >= now.getTime());
+  const session = upcoming ?? sessions[0];
   if (!session) {
     await say("I don't have a log from you to edit.");
     return null;
   }
+  const today = todayYmd(now, person.timezone);
   const draft = parseDraft(instruction);
   const beds = await store.listBeds();
   const plantings = await store.listPlantings();
   let next: WorkSession = { ...session, raw_message: instruction };
-  if (draft && timeGaps(draft).length === 0) {
-    const interval = resolveInterval(draft, now, person.timezone);
+  let moved = false;
+  const newDay = dayFromEditInstruction(instruction, draft, now, person.timezone);
+  const hasNewTime = Boolean(draft && timeGaps(draft).length === 0);
+
+  if (hasNewTime && draft) {
+    // New times: use the named day, else keep this session's day.
+    const keepDay = todayYmd(new Date(session.start), person.timezone);
+    const interval = resolveInterval(
+      {
+        ...draft,
+        onDate:
+          draft.onDate ??
+          (draft.weekday != null || draft.dayOffset != null || draft.nextWeek ? null : newDay ?? keepDay),
+        dayOffset: draft.weekday != null || draft.onDate ? draft.dayOffset : draft.dayOffset,
+      },
+      now,
+      person.timezone,
+    );
     if (interval) {
       next = { ...next, start: interval.start.toISOString(), end: interval.end.toISOString() };
+      moved = true;
     }
+  } else if (newDay) {
+    // Date-only: "update to 11/26" / "change to next Thursday" — same hours, new day.
+    next = moveSessionToDay(next, newDay, person.timezone);
+    moved = true;
   }
-  const loc = matchLocation(instruction, beds, plantings, todayYmd(now, person.timezone));
+
+  const loc = matchLocation(instruction, beds, plantings, todayYmd(new Date(next.start), person.timezone));
   if (loc.bed) {
     next = { ...next, bed_id: loc.bed.id, planting_id: loc.planting?.id ?? next.planting_id };
   }
-  if (draft?.activity) next = { ...next, activity_type: draft.activity };
+  if (draft?.activity && draft.activity !== "other") next = { ...next, activity_type: draft.activity };
   const crop = draft?.crop ?? loc.planting?.crop ?? null;
   const bed = beds.find((item) => item.id === next.bed_id) ?? null;
   if (draft?.activity || loc.bed || draft?.crop) {
@@ -921,8 +948,12 @@ async function edit(
       ...next,
       notes: sentence(workPhrase(next.activity_type, crop, bed?.name ?? null)) + ".",
     };
-  } else if (!(draft && timeGaps(draft).length === 0)) {
+  } else if (!moved) {
     next = { ...next, notes: instruction };
+  }
+  if (!moved && !loc.bed && !(draft?.activity && draft.activity !== "other") && !draft?.crop) {
+    await say('Tell me the new date or time — e.g. "update to 11/26" or "change to 2–4pm".');
+    return null;
   }
   await store.updateSession(next);
   const planting = plantings.find((item) => item.source_session_id === next.id);
@@ -938,6 +969,52 @@ async function edit(
   const when = whenPhrase(new Date(next.start), new Date(next.end), now, person.timezone);
   await say(`Updated: ${person.name}, ${when}, ${next.notes.replace(/\.$/, "").toLowerCase()}.`);
   return next;
+}
+
+/** Keep the same local clock times, shift onto a new garden-calendar day. */
+function moveSessionToDay(session: WorkSession, day: string, timeZone: string): WorkSession {
+  const startParts = partsInZone(new Date(session.start), timeZone);
+  const endParts = partsInZone(new Date(session.end), timeZone);
+  const startDay = ymd(startParts);
+  const endDayOrig = ymd(endParts);
+  const endDay = endDayOrig !== startDay ? addDays(day, 1) : day;
+  return {
+    ...session,
+    start: zonedToUtc(day, startParts.hour, startParts.minute, timeZone).toISOString(),
+    end: zonedToUtc(endDay, endParts.hour, endParts.minute, timeZone).toISOString(),
+  };
+}
+
+/** Pull a target day out of an edit like "11/26", "November 26", or "next Thursday". */
+function dayFromEditInstruction(
+  instruction: string,
+  draft: ReturnType<typeof parseDraft>,
+  now: Date,
+  timeZone: string,
+): string | null {
+  const today = todayYmd(now, timeZone);
+  const direct = calendarDate(instruction, today);
+  if (direct) return direct;
+  if (draft?.onDate) {
+    const stored = resolveStoredDate(draft.onDate, today);
+    if (stored) return stored;
+  }
+  if (draft && (draft.weekday != null || draft.dayOffset != null || draft.nextWeek)) {
+    const probe = resolveInterval(
+      {
+        ...draft,
+        start: { h: 9, m: 0 },
+        startAmpm: "am",
+        end: { h: 10, m: 0 },
+        endAmpm: "am",
+        durationMin: null,
+      },
+      now,
+      timeZone,
+    );
+    return probe?.day ?? null;
+  }
+  return null;
 }
 
 async function scheduleText(store: Store, now: Date, timeZone: string): Promise<string> {
@@ -1007,7 +1084,13 @@ async function claimTask(
 
   const next = tasks.map((item) =>
     item.id === task.id
-      ? { ...item, status: "claimed" as const, assignee_id: person.id, source: "planner" as const }
+      ? {
+          ...item,
+          status: "claimed" as const,
+          assignee_id: person.id,
+          suggested_assignee_id: null,
+          source: "planner" as const,
+        }
       : item,
   );
   await store.saveTasks(next);

@@ -117,6 +117,8 @@ export type Task = {
   bed_id: string | null;
   status: TaskStatus;
   assignee_id: string | null;
+  /** Soft week-plan suggestion (not a claim). Cleared when claimed. */
+  suggested_assignee_id?: string | null;
   source: "rule" | "planner";
   rationale: string;
 };
