@@ -10,7 +10,8 @@ import type { GardenData } from "@/lib/garden-data";
 import { harvestSeason, isPerennial, monthsLabel, nextReady, perennialInfo } from "@/lib/perennials";
 import { nitrogenReason, nitrogenTip, type NitrogenBalance } from "@/lib/nitrogen";
 import type { BedAdvice, Recommendation } from "@/lib/recommend";
-import type { Bed, Planting } from "@/lib/types";
+import { areaOfBed, areasOf } from "@/lib/garden-areas";
+import type { Bed, GardenArea, Planting } from "@/lib/types";
 import { showArea, showSize } from "@/lib/units";
 
 function shortDate(day: string, withYear = false): string {
@@ -117,10 +118,20 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
         </div>
       ) : null}
       <ul className="bed-rows">
-        {byHarvest(data.beds, advice, data.today)
-          // Open plots already have their own green cards above; only looking back (no cards) lists them here.
-          .filter((bed) => props.mode === "past" || !open.includes(bed))
-          .map((bed) => {
+        {groupByArea(
+          byHarvest(data.beds, advice, data.today)
+            // Open plots already have their own green cards above; only looking back (no cards) lists them here.
+            .filter((bed) => props.mode === "past" || !open.includes(bed)),
+          areasOf(data.layout),
+        ).map((item) => {
+          if ("heading" in item) {
+            return (
+              <li key={item.key} className="area-heading">
+                {item.heading}
+              </li>
+            );
+          }
+          const bed = item.bed;
           const a = advice.get(bed.id);
           const now = soonestHarvest(a?.current ?? [], data.today);
           const next = a?.planned[0];
@@ -160,6 +171,23 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
       </ul>
     </>
   );
+}
+
+/**
+ * With two or more growing areas, the list is split under each area's name (plots outside every area go under
+ * "Elsewhere"), keeping the harvest order within each. With one area or none, it's the plain list.
+ */
+function groupByArea(beds: Bed[], areas: GardenArea[]): Array<{ bed: Bed } | { heading: string; key: string }> {
+  if (areas.length < 2) return beds.map((bed) => ({ bed }));
+  const out: Array<{ bed: Bed } | { heading: string; key: string }> = [];
+  for (const area of areas) {
+    const mine = beds.filter((bed) => areaOfBed(bed, areas)?.id === area.id);
+    if (!mine.length) continue;
+    out.push({ heading: area.name, key: `area-${area.id}` }, ...mine.map((bed) => ({ bed })));
+  }
+  const loose = beds.filter((bed) => !areaOfBed(bed, areas));
+  if (loose.length) out.push({ heading: "Elsewhere", key: "area-none" }, ...loose.map((bed) => ({ bed })));
+  return out;
 }
 
 /**

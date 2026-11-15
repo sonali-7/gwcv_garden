@@ -2968,3 +2968,75 @@ h1 {
 .eco-more dd .detail {
   display: block;
 }
+
+/* Growing areas: a name tag above each area's top-left corner; in Edit layout it's the handle to move the area. */
+.area-tag {
+  position: absolute;
+  z-index: 7;
+  transform: translateY(calc(-100% - 4px));
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 2px;
+  background: #fff3c4;
+  border: 2px solid #4a2f18;
+  box-shadow: 2px 2px 0 #4a2f18;
+  font-family: var(--font-pixel), ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.area-tag.editing {
+  pointer-events: auto;
+  cursor: grab;
+}
+.area-tag.editing:active {
+  cursor: grabbing;
+}
+.area-name-input {
+  font: inherit;
+  width: 12ch;
+  border: 0;
+  background: #fffaf2;
+  padding: 0 2px;
+}
+.area-delete {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  color: #8a3b1c;
+}
+.area-delete:disabled {
+  opacity: 0.4;
+}
+.area-resize {
+  position: absolute;
+  z-index: 7;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  background: #ffe066;
+  border: 2px solid #4a2f18;
+  cursor: nwse-resize;
+}
+
+/* Undo sits beside Edit layout. */
+.pill.undo:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Area names splitting the plant list when the map has several growing areas. */
+.bed-rows .area-heading {
+  margin: 10px 0 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}

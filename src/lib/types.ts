@@ -42,6 +42,23 @@ export type GardenLayout = {
   units: "ft" | "m";
   /** The garden's shape as [x, y] points in feet, when it isn't a plain rectangle. */
   outline: Array<[number, number]> | null;
+  /**
+   * Separate growing areas on one map (two gardens on one lot, say), each drawn as its own patch of soil.
+   * When there are any, they replace the single outline above. Plots belong to the area they sit in.
+   */
+  areas?: GardenArea[];
+};
+
+export type GardenArea = {
+  id: string;
+  name: string;
+  /** Its box, in feet from the map's top-left corner. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** An odd shape inside that box, as [x, y] points in feet on the map; null for a plain rectangle. */
+  outline: Array<[number, number]> | null;
 };
 
 export function defaultLayout(): GardenLayout {

@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { firstOverlap, openSpot } from "@/lib/bed-space";
+import { areasOf, rectInArea } from "@/lib/garden-areas";
 import { getStore } from "@/lib/db";
 import { cleanGeometry, cleanName } from "@/lib/garden-api";
 import { json, noContent } from "@/lib/http";
-import type { Bed } from "@/lib/types";
+import type { Bed, GardenLayout } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
     const hit = firstOverlap(asked, beds.filter((item) => !item.archived));
     if (hit) return json({ error: `That would overlap ${hit.name}.` }, 409);
   }
-  const geometry = asked ?? openSpot(taken, layout.widthFt, layout.lengthFt, Math.min(8, layout.widthFt), Math.min(4, layout.lengthFt));
+  const geometry = asked ?? spotInAreas(taken, layout) ?? openSpot(taken, layout.widthFt, layout.lengthFt, Math.min(8, layout.widthFt), Math.min(4, layout.lengthFt));
   if (!geometry) return json({ error: "There's no open ground left. Make a bed smaller or remove one first." }, 409);
   const bed: Bed = {
     id: `bed-${randomUUID().slice(0, 8)}`,
@@ -48,4 +49,20 @@ function nextPlotName(beds: Bed[]): string {
   let n = 1;
   while (used.has(n)) n += 1;
   return `Plot ${n}`;
+}
+
+/** With growing areas, a new plot goes on open ground inside one of them (the first with room), not on the grass between. */
+function spotInAreas(taken: NonNullable<Bed["geometry"]>[], layout: GardenLayout): NonNullable<Bed["geometry"]> | null {
+  for (const area of areasOf(layout)) {
+    const local = taken.map((g) => ({ ...g, x: g.x - area.x, y: g.y - area.y }));
+    // An odd-shaped area's box includes ground outside its edge: skip spots that aren't wholly inside the shape.
+    for (let tries = 0; tries < 200; tries++) {
+      const spot = openSpot(local, area.w, area.h, Math.min(8, area.w), Math.min(4, area.h));
+      if (!spot) break;
+      const placed = { ...spot, x: spot.x + area.x, y: spot.y + area.y };
+      if (rectInArea(placed, area)) return placed;
+      local.push(spot);
+    }
+  }
+  return null;
 }

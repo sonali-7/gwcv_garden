@@ -12,6 +12,7 @@ import type { GardenData } from "@/lib/garden-data";
 import { canDelete, clearing, cropsInPatch, dropSituation, isEstablished, replacementDate, type Occupant } from "@/lib/drop-plan";
 import { adviseBed, guideFor, type Recommendation } from "@/lib/recommend";
 import type { Bed, GardenLayout } from "@/lib/types";
+import { UNDO_LIMIT, undoStep, type UndoStep } from "@/lib/undo";
 
 async function send<T>(url: string, method: string, body?: unknown): Promise<T | null> {
   const response = await fetch(url, {
@@ -35,6 +36,8 @@ export function GardenView({ initial }: { initial: GardenData }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [importing, setImporting] = useState(false);
+  // Edits made in this tab, newest last, so Undo (or Ctrl/⌘+Z) can step back through them.
+  const [history, setHistory] = useState<UndoStep[]>([]);
   // The date the map shows. The timeline moves it into the past (view only) or the future (to plan).
   const [day, setDay] = useState(initial.today);
   // A crop dropped on a patch that already has something established in it (or several crops), waiting for a choice.
@@ -48,6 +51,15 @@ export function GardenView({ initial }: { initial: GardenData }) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") setSelectedId(null);
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+        const target = event.target as HTMLElement | null;
+        // Inside a text box, Ctrl/⌘+Z undoes typing as usual.
+        if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+        if (busy || document.querySelector("dialog[open]") || !history.length) return;
+        event.preventDefault();
+        void undo();
+        return;
+      }
       if (event.key !== "Delete" && event.key !== "Backspace") return;
       const target = event.target as HTMLElement | null;
       if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
@@ -86,19 +98,48 @@ export function GardenView({ initial }: { initial: GardenData }) {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  async function reload() {
+  async function reload(): Promise<GardenData | null> {
     const response = await fetch("/api/garden", { cache: "no-store" });
-    if (response.ok) setData((await response.json()) as GardenData);
+    if (!response.ok) return null;
+    const fresh = (await response.json()) as GardenData;
+    setData(fresh);
+    return fresh;
   }
 
-  async function run(job: () => Promise<void>) {
+  /**
+   * Make an edit, then refresh. What it changed (compared with before) is kept so Undo can put it back;
+   * `label` says what it was, for the Undo button.
+   */
+  async function run(label: string, job: () => Promise<void>) {
+    setBusy(true);
+    setError("");
+    const before = { beds: data.beds, plantings: data.plantings, layout: data.layout };
+    try {
+      await job();
+      const fresh = await reload();
+      const step = fresh ? undoStep(label, before, { beds: fresh.beds, plantings: fresh.plantings, layout: fresh.layout }) : null;
+      if (step) setHistory((prev) => [...prev, step].slice(-UNDO_LIMIT));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That didn't save.");
+      await reload().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Step back one edit: put back what it changed and remove what it added. */
+  async function undo() {
+    const step = history.at(-1);
+    if (!step || busy) return;
     setBusy(true);
     setError("");
     try {
-      await job();
+      await send("/api/garden/undo", "POST", { beds: step.beds, plantings: step.plantings, layout: step.layout });
+      setHistory((prev) => prev.slice(0, -1));
       await reload();
+      setNotice(`Undid: ${step.label}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't save.");
+      setError(err instanceof Error ? err.message : "Couldn't undo that.");
       await reload().catch(() => undefined);
     } finally {
       setBusy(false);
@@ -132,7 +173,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
 
   function moveBed(bed: Bed, geometry: NonNullable<Bed["geometry"]>) {
     setData((prev) => ({ ...prev, beds: prev.beds.map((item) => (item.id === bed.id ? { ...item, geometry } : item)) }));
-    run(async () => {
+    run(`move ${bed.name}`, async () => {
       await send(`/api/beds/${bed.id}`, "PATCH", { geometry });
     });
   }
@@ -148,7 +189,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
     const date = best > data.today ? best : addOne(data.today);
     const company = advice.get(bedId)?.current.map((p) => p.crop).filter((c) => c !== crop) ?? [];
     const label = new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
-    run(async () => {
+    run(`plan ${crop} in ${bed.name}`, async () => {
       await send("/api/plantings", "POST", { bed_id: bedId, crop, planted_date: date });
       setSelectedId(bedId);
       setNotice(
@@ -174,7 +215,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
       ? `Remove ${bed.name} from the map, and its plan for ${plans.join(" and ")}?`
       : `Remove ${bed.name} from the map?`;
     if (!window.confirm(question)) return;
-    run(async () => {
+    run(`remove ${bed.name}`, async () => {
       await send(`/api/beds/${bed.id}`, "DELETE");
       setSelectedId(null);
       setNotice(`Removed ${bed.name}.`);
@@ -186,7 +227,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
     const planting = data.plantings.find((p) => p.id === plantingId);
     const bed = planting ? data.beds.find((item) => item.id === planting.bed_id) : null;
     if (!planting) return;
-    run(async () => {
+    run(`mark the ${planting.crop} planted`, async () => {
       await send(`/api/plantings/${plantingId}`, "PATCH", { planted: true });
       setNotice(`Marked the ${planting.crop} in ${bed?.name ?? "the bed"} planted today.`);
     });
@@ -202,7 +243,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
     const pulled = steps.filter((s) => s.how.action === "pull").map((s) => s.planting.crop);
     if (pulled.length && !window.confirm(`Mark the ${[...new Set(pulled)].join(" and ")} pulled on ${longDate(day)}? It stays in ${bed?.name ?? "the bed"}'s history.`)) return;
     const names = [...new Set(old.map((p) => p.crop))].join(" and ");
-    run(async () => {
+    run(`remove the ${names}`, async () => {
       for (const { planting, how } of steps) {
         if (how.action === "delete") await send(`/api/plantings/${planting.id}`, "DELETE");
         else await send(`/api/plantings/${planting.id}`, "PATCH", { removed_date: how.on });
@@ -245,7 +286,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
     if (avoided && !window.confirm(`${avoided.reason} Plant ${crop} here anyway?`)) return;
     const date = replacementDate(old, day, data.today, guideFor(crop)?.sowMonths);
     const swapped = [...new Set(old.map((p) => p.crop))].join(" and ");
-    run(async () => {
+    run(`replace the ${swapped} with ${crop}`, async () => {
       for (const { planting, how } of steps) {
         if (how.action === "delete") await send(`/api/plantings/${planting.id}`, "DELETE");
         else await send(`/api/plantings/${planting.id}`, "PATCH", { removed_date: how.on });
@@ -281,6 +322,16 @@ export function GardenView({ initial }: { initial: GardenData }) {
           {notice ? <span className="toast" role="status">{notice}</span> : null}
           <button
             type="button"
+            className="pill undo"
+            onClick={() => void undo()}
+            disabled={busy || !history.length}
+            title={history.length ? `Undo: ${history.at(-1)!.label} (Ctrl/⌘+Z)` : "Nothing to undo"}
+            aria-label={history.length ? `Undo: ${history.at(-1)!.label}` : "Undo"}
+          >
+            ↶ Undo
+          </button>
+          <button
+            type="button"
             className={editing ? "pill on" : "pill"}
             onClick={() => setEditing((value) => !value)}
             aria-pressed={editing}
@@ -313,15 +364,20 @@ export function GardenView({ initial }: { initial: GardenData }) {
           }}
           onMove={moveBed}
           onDropCrop={dropCrop}
+          onAreaAction={(action, label) =>
+            run(label, async () => {
+              await send("/api/layout/areas", "POST", action);
+            })
+          }
           onImport={() => setImporting(true)}
           onAddBed={() =>
-            run(async () => {
+            run("add a plot", async () => {
               const bed = await send<Bed>("/api/beds", "POST", {});
               if (bed) setSelectedId(bed.id);
             })
           }
           onLayout={(patch: Partial<GardenLayout> & { imageDataUrl?: string | null }) =>
-            run(async () => {
+            run("change the garden settings", async () => {
               await send("/api/layout", "PUT", patch);
             })
           }
@@ -340,7 +396,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
           onStartRename={setRenamingId}
           onStopRename={() => setRenamingId(null)}
           onRename={(bed, name) =>
-            run(async () => {
+            run(`rename ${bed.name}`, async () => {
               await send(`/api/beds/${bed.id}`, "PATCH", { name });
             })
           }
@@ -407,6 +463,8 @@ export function GardenView({ initial }: { initial: GardenData }) {
         onDone={(result) => {
           setImporting(false);
           setSelectedId(null);
+          // An import rebuilds the whole garden, so earlier steps can't be undone one by one anymore.
+          setHistory([]);
           const bits = [
             result.created ? `${result.created} new bed${result.created === 1 ? "" : "s"}` : "",
             result.moved ? `${result.moved} moved` : "",
