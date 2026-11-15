@@ -163,6 +163,12 @@ export function createMongoStore(uri: string, dbName: string): ConnectedStore {
       const doc = await rows(await database(), "threads").findOne({ _id: phone });
       return (doc?.messages as ThreadMessage[] | undefined) ?? [];
     },
+    async listThreads() {
+      const found = await rows(await database(), "threads").find({}).toArray();
+      return Object.fromEntries(
+        found.map((row) => [String(row._id), ((row.messages as ThreadMessage[] | undefined) ?? []).slice()]),
+      );
+    },
     async appendThread(phone, message) {
       const threads = rows(await database(), "threads");
       const existing = await threads.findOne({ _id: phone });
@@ -214,16 +220,17 @@ async function writeTasks(col: Collection<Row>, tasks: Array<{ id: string } & Re
         await col.deleteMany({});
         return;
       }
-      for (const task of tasks) {
-        const doc = { ...task, _id: task.id };
-        try {
-          await col.replaceOne({ _id: task.id }, doc, { upsert: true });
-        } catch (error) {
-          // Concurrent upserts of a missing _id can both try to insert; the loser retries as update.
-          if (!isDupKey(error)) throw error;
-          await col.replaceOne({ _id: task.id }, doc);
-        }
-      }
+      // One round-trip instead of N sequential replaceOnes (was ~50ms each on Atlas).
+      await col.bulkWrite(
+        tasks.map((task) => ({
+          replaceOne: {
+            filter: { _id: task.id },
+            replacement: { ...task, _id: task.id },
+            upsert: true,
+          },
+        })),
+        { ordered: false },
+      );
       await col.deleteMany({ _id: { $nin: tasks.map((task) => task.id) } });
       return;
     } catch (error) {

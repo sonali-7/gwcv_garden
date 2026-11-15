@@ -156,55 +156,90 @@ function shortDay(ymd: string): string {
 
 /** Anyone who has already sent at least one inbound text (simulator or Photon). */
 export async function volunteersWhoTexted(store: Store): Promise<Person[]> {
-  const people = await store.listPeople();
-  const out: Person[] = [];
-  for (const person of people) {
-    const thread = await store.getThread(person.phone);
-    if (thread.some((item) => item.direction === "in")) out.push(person);
-  }
-  return out;
+  const [people, threads] = await Promise.all([store.listPeople(), store.listThreads()]);
+  return people.filter((person) => (threads[person.phone] ?? []).some((item) => item.direction === "in"));
 }
 
 export async function liveTasks(store: Store, now = new Date()): Promise<Task[]> {
   const timeZone = gardenTz();
-  const [beds, plantings, sessions, saved] = await Promise.all([
+  const [beds, plantings, sessions, saved, rain] = await Promise.all([
     store.listBeds(),
     store.listPlantings(),
     store.listSessions(),
     store.listTasks(),
+    gardenRain(store),
   ]);
-  return mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone, rain: await gardenRain(store) }), saved);
+  return mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone, rain }), saved);
 }
+
+/** Stable fingerprint so we can skip rewriting Atlas on every calendar/garden load. */
+export function taskSnapshot(tasks: Task[]): string {
+  return JSON.stringify(
+    [...tasks]
+      .map((task) => normalizeTask(task))
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((task) => [
+        task.id,
+        task.type,
+        task.severity,
+        task.title,
+        task.detail,
+        task.due_date,
+        task.planting_id,
+        task.bed_id,
+        task.status,
+        task.assignee_id,
+        task.source,
+        task.rationale,
+      ]),
+  );
+}
+
+export type ReconciledGarden = {
+  tasks: Task[];
+  beds: Bed[];
+  plantings: Planting[];
+  sessions: WorkSession[];
+};
 
 /**
  * Rebuild priority from the live garden (same rules as the map), keep only still-valid
  * claims, write that list back so stale task rows disappear from the DB.
  * Also marks active plantings with a missing bed as removed.
+ * Returns the garden rows it already loaded so callers don't hit Atlas twice.
  */
-export async function reconcilePriorityTasks(store: Store, now = new Date()): Promise<Task[]> {
+export async function reconcileGardenState(store: Store, now = new Date()): Promise<ReconciledGarden> {
   const timeZone = gardenTz();
   const today = todayYmd(now, timeZone);
-  const [beds, plantings, sessions, saved] = await Promise.all([
+  const [beds, plantings, sessions, saved, rain] = await Promise.all([
     store.listBeds(),
     store.listPlantings(),
     store.listSessions(),
     store.listTasks(),
+    gardenRain(store),
   ]);
 
   const bedIds = new Set(beds.map((bed) => bed.id));
-  for (const planting of plantings) {
-    if (planting.removed_date) continue;
-    if (planting.planted_date > today) continue;
-    if (bedIds.has(planting.bed_id)) continue;
-    // Bed was deleted; stop counting it as in-ground.
-    await store.updatePlanting({ ...planting, removed_date: today });
+  const orphans = plantings.filter(
+    (planting) => !planting.removed_date && planting.planted_date <= today && !bedIds.has(planting.bed_id),
+  );
+  let cleanedPlantings = plantings;
+  if (orphans.length) {
+    await Promise.all(orphans.map((planting) => store.updatePlanting({ ...planting, removed_date: today })));
+    cleanedPlantings = await store.listPlantings();
   }
 
-  const cleanedPlantings = await store.listPlantings();
-  const computed = buildTasks({ now, beds, plantings: cleanedPlantings, sessions, timeZone, rain: await gardenRain(store) });
+  const computed = buildTasks({ now, beds, plantings: cleanedPlantings, sessions, timeZone, rain });
   const tasks = mergeTaskState(computed, saved).filter((task) => task.status !== "done" && task.status !== "rejected");
-  await store.saveTasks(tasks);
-  return tasks;
+  // Avoid a ~1s+ Atlas rewrite when nothing changed (common on every page load / week flip).
+  if (taskSnapshot(tasks) !== taskSnapshot(saved.filter((task) => task.status !== "done" && task.status !== "rejected"))) {
+    await store.saveTasks(tasks);
+  }
+  return { tasks, beds, plantings: cleanedPlantings, sessions };
+}
+
+export async function reconcilePriorityTasks(store: Store, now = new Date()): Promise<Task[]> {
+  return (await reconcileGardenState(store, now)).tasks;
 }
 
 /** Always the Sunday after this week's Sunday — even if today is already Sunday. */
@@ -215,14 +250,15 @@ export function nextWeekStartYmd(now: Date, timeZone = gardenTz()): string {
 export async function proposeWeekPlan(store: Store, now = new Date()): Promise<WeekPlanPreview> {
   const timeZone = gardenTz();
   const weekStart = nextWeekStartYmd(now, timeZone);
-  const [beds, plantings, sessions, people, saved] = await Promise.all([
+  const [beds, plantings, sessions, people, saved, rain] = await Promise.all([
     store.listBeds(),
     store.listPlantings(),
     store.listSessions(),
     store.listPeople(),
     store.listTasks(),
+    gardenRain(store),
   ]);
-  const merged = mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone, rain: await gardenRain(store) }), saved);
+  const merged = mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone, rain }), saved);
   const tasks = merged.map((task) => {
     if (task.status === "claimed" && task.assignee_id) return { ...task, source: "planner" as const };
     return {
@@ -253,13 +289,18 @@ export async function approveAndSendPlan(store: Store, now = new Date()): Promis
   );
   await store.saveTasks(tasks);
 
-  const people = await volunteersWhoTexted(store);
+  const [people, allPeople, beds, plantings] = await Promise.all([
+    volunteersWhoTexted(store),
+    store.listPeople(),
+    store.listBeds(),
+    store.listPlantings(),
+  ]);
   const text = formatWeekPlanText({
     tasks,
     plannedSessions: preview.plannedSessions,
-    people: await store.listPeople(),
-    beds: await store.listBeds(),
-    plantings: await store.listPlantings(),
+    people: allPeople,
+    beds,
+    plantings,
     timeZone: gardenTz(),
     weekStart: preview.weekStart,
   });

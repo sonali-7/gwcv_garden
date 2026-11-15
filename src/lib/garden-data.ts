@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { spriteFileKey } from "./pixel-sprites";
-import { reconcilePriorityTasks } from "./planner";
+import { reconcileGardenState } from "./planner";
 import type { Store } from "./store";
 import { gardenTz, todayYmd } from "./time";
 import { toPublicPerson, type Bed, type CropProfile, type GardenLayout, type Photo, type Planting, type PublicPerson, type Task, type WorkSession } from "./types";
@@ -38,15 +38,12 @@ async function customSprites(): Promise<Record<string, string>> {
 
 export async function loadGarden(store: Store, now = new Date()): Promise<GardenData> {
   const timeZone = gardenTz();
-  // Same reconcile as the calendar so map markers and the priority list share one source of truth.
-  const tasks = await reconcilePriorityTasks(store, now);
-  const [sprites, layout, people, beds, plantings, sessions, photos, cropProfiles] = await Promise.all([
+  // Same reconcile as the calendar; reuse its beds/plantings/sessions instead of listing twice.
+  const [garden, sprites, layout, people, photos, cropProfiles] = await Promise.all([
+    reconcileGardenState(store, now),
     customSprites(),
     store.getLayout(),
     store.listPeople(),
-    store.listBeds(),
-    store.listPlantings(),
-    store.listSessions(),
     store.listPhotos(),
     store.listCropProfiles(),
   ]);
@@ -55,11 +52,11 @@ export async function loadGarden(store: Store, now = new Date()): Promise<Garden
     timezone: timeZone,
     layout,
     people: people.map(toPublicPerson),
-    beds: beds.filter((bed) => !bed.archived),
-    plantings,
-    sessions,
+    beds: garden.beds.filter((bed) => !bed.archived),
+    plantings: garden.plantings,
+    sessions: garden.sessions,
     photos,
-    tasks,
+    tasks: garden.tasks,
     sprites,
     cropProfiles,
   };

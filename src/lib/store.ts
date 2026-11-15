@@ -43,6 +43,8 @@ export interface Store {
   listTasks(): Promise<Task[]>;
   saveTasks(tasks: Task[]): Promise<void>;
   getThread(phone: string): Promise<ThreadMessage[]>;
+  /** All SMS threads keyed by phone — one query instead of N getThread calls. */
+  listThreads(): Promise<Record<string, ThreadMessage[]>>;
   appendThread(phone: string, message: ThreadMessage): Promise<void>;
   getConversation(phone: string): Promise<Conversation>;
   saveConversation(phone: string, conversation: Conversation): Promise<void>;
