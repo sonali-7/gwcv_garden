@@ -1,5 +1,5 @@
 import { getStore } from "@/lib/db";
-import { addArea, areaFits, areasOf, bedsInArea, resizeArea, shiftArea } from "@/lib/garden-areas";
+import { addArea, areaFits, areasOf, bedsInArea, cleanPoints, reshapeArea, resizeArea, shiftArea } from "@/lib/garden-areas";
 import { json, noContent } from "@/lib/http";
 import type { GardenLayout } from "@/lib/types";
 
@@ -17,6 +17,7 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
  *   { action: "add" }                       a new area beside the others (the existing garden becomes Area 1)
  *   { action: "move", id, dx, dy }          move an area and the plots in it, in feet
  *   { action: "resize", id, w, h }          resize from its top-left corner
+ *   { action: "reshape", id, outline }      new corners for its shape ([x, y] feet)
  *   { action: "rename", id, name }
  *   { action: "delete", id }                only when no plots are in it
  */
@@ -59,6 +60,17 @@ export async function POST(request: Request) {
       return json({ error: "That size would overlap another area or leave the map." }, 409);
     }
     const next = { ...layout, areas: areas.map((item) => (item.id === area.id ? resized : item)) };
+    await store.saveLayout(next);
+    return json(next);
+  }
+
+  if (body?.action === "reshape") {
+    const points = cleanPoints(body.outline, layout.widthFt, layout.lengthFt);
+    const reshaped = points ? reshapeArea(area, points) : null;
+    if (!reshaped || !areaFits(reshaped, areas, layout.widthFt, layout.lengthFt)) {
+      return json({ error: "That shape would cross itself, overlap another area, or be too small." }, 409);
+    }
+    const next = { ...layout, areas: areas.map((item) => (item.id === area.id ? reshaped : item)) };
     await store.saveLayout(next);
     return json(next);
   }

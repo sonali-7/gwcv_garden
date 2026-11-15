@@ -72,7 +72,7 @@ export function rectInArea(rect: Rect, area: GardenArea): boolean {
 }
 
 /** A box around some points, rounded to a tenth of a foot. */
-function bounds(points: Array<[number, number]>): Rect {
+export function bounds(points: Array<[number, number]>): Rect {
   const xs = points.map(([x]) => x);
   const ys = points.map(([, y]) => y);
   const x = Math.min(...xs);
@@ -140,14 +140,73 @@ export function resizeArea(area: GardenArea, w: number, h: number): GardenArea {
   };
 }
 
+function segmentsCross(a: [number, number], b: [number, number], c: [number, number], d: [number, number]): boolean {
+  const cross = (p: [number, number], q: [number, number], r: [number, number]) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+/** Whether two shapes share ground: their edges cross, or one sits inside the other. Touching edges don't count. */
+export function polygonsOverlap(a: Array<[number, number]>, b: Array<[number, number]>): boolean {
+  for (let i = 0; i < a.length; i++) {
+    for (let j = 0; j < b.length; j++) {
+      if (segmentsCross(a[i], a[(i + 1) % a.length], b[j], b[(j + 1) % b.length])) return true;
+    }
+  }
+  const middle = (poly: Array<[number, number]>): [number, number] => {
+    const box = bounds(poly);
+    // A point just inside the first corner, so a shape wholly inside the other is caught.
+    const [x, y] = poly[0];
+    return [x + (box.x + box.w / 2 - x) * 0.01, y + (box.y + box.h / 2 - y) * 0.01];
+  };
+  return insidePolygon(...middle(a), b) || insidePolygon(...middle(b), a);
+}
+
+/** An outline whose edges cross itself (a bow tie) can't be drawn as soil sensibly. */
+export function selfCrossing(points: Array<[number, number]>): boolean {
+  const n = points.length;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      if (segmentsCross(points[i], points[(i + 1) % n], points[j], points[(j + 1) % n])) return true;
+    }
+  }
+  return false;
+}
+
 /**
- * Where an area can go: inside the map, at least MIN_FT across, and not on top of another area.
- * Returns null if `next` isn't allowed, so the drag can stay where it last was.
+ * Where an area can go: inside the map, at least MIN_FT across, a shape that doesn't cross itself, and not on top
+ * of another area (by their actual shapes, so odd shapes can tuck in close).
  */
 export function areaFits(next: GardenArea, others: GardenArea[], widthFt: number, lengthFt: number): boolean {
   if (next.w < MIN_FT || next.h < MIN_FT) return false;
-  if (next.x < 0 || next.y < 0 || next.x + next.w > widthFt + 0.01 || next.y + next.h > lengthFt + 0.01) return false;
-  return !others.some((other) => other.id !== next.id && overlaps(next, other));
+  if (next.x < -0.01 || next.y < -0.01 || next.x + next.w > widthFt + 0.01 || next.y + next.h > lengthFt + 0.01) return false;
+  const shape = areaPolygon(next);
+  if (selfCrossing(shape)) return false;
+  return !others.some((other) => other.id !== next.id && overlaps(next, other) && polygonsOverlap(shape, areaPolygon(other)));
+}
+
+/** An area given a new outline (corners moved, added or removed); its box follows the shape. */
+export function reshapeArea(area: GardenArea, points: Array<[number, number]>): GardenArea {
+  const outline = points.map(([x, y]) => [r1(x), r1(y)] as [number, number]);
+  return { ...area, ...bounds(outline), outline };
+}
+
+/** Points sent to the server: 3 to 200 [x, y] pairs inside the map, rounded. Null if unusable. */
+export function cleanPoints(value: unknown, widthFt: number, lengthFt: number): Array<[number, number]> | null {
+  if (!Array.isArray(value) || value.length < 3 || value.length > 200) return null;
+  const points: Array<[number, number]> = [];
+  for (const p of value) {
+    if (!Array.isArray(p) || p.length !== 2) return null;
+    const x = Number(p[0]);
+    const y = Number(p[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    points.push([r1(Math.min(Math.max(x, 0), widthFt)), r1(Math.min(Math.max(y, 0), lengthFt))]);
+  }
+  return points;
 }
 
 /** Check areas sent to the server: well-formed, inside the map, named. Returns undefined to clear them. */
@@ -186,5 +245,6 @@ export type AreaAction =
   | { action: "add" }
   | { action: "move"; id: string; dx: number; dy: number }
   | { action: "resize"; id: string; w: number; h: number }
+  | { action: "reshape"; id: string; outline: Array<[number, number]> }
   | { action: "rename"; id: string; name: string }
   | { action: "delete"; id: string };

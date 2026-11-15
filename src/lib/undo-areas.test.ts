@@ -109,3 +109,29 @@ describe("plots inside an odd-shaped area", async () => {
     assert.ok(!rectInArea({ x: 6, y: 6, w: 3, h: 2 }, triangle), "the empty corner of the box");
   });
 });
+
+describe("reshaping areas", async () => {
+  const { areaFits, polygonsOverlap, reshapeArea, selfCrossing } = await import("./garden-areas");
+  const a = { id: "a", name: "A", x: 0, y: 0, w: 10, h: 10, outline: null };
+  const b = { id: "b", name: "B", x: 12, y: 0, w: 10, h: 10, outline: null };
+
+  it("follows the new corners, box and all", () => {
+    const l = reshapeArea(a, [[0, 0], [10, 0], [10, 4], [4, 4], [4, 12], [0, 12]]);
+    assert.deepEqual([l.x, l.y, l.w, l.h], [0, 0, 10, 12]);
+    assert.equal(l.outline!.length, 6);
+  });
+
+  it("refuses a bow tie", () => {
+    assert.ok(selfCrossing([[0, 0], [10, 10], [10, 0], [0, 10]]));
+    assert.ok(!selfCrossing([[0, 0], [10, 0], [10, 10], [0, 10]]));
+  });
+
+  it("lets odd shapes tuck in close as long as they don't share ground", () => {
+    // A's slanted edge leaves room in the corner of its box, where B's corner can sit.
+    const slanted = reshapeArea(a, [[0, 0], [10, 0], [0, 10]]);
+    const tucked = reshapeArea(b, [[7, 7], [12, 7], [12, 12], [7, 12]]);
+    assert.ok(!polygonsOverlap(slanted.outline!, tucked.outline!));
+    assert.ok(areaFits(tucked, [slanted, tucked], 40, 30));
+    assert.ok(!areaFits(reshapeArea(b, [[2, 2], [12, 2], [12, 12], [2, 12]]), [slanted, b], 40, 30), "covers A's ground");
+  });
+});
