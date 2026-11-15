@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isPdf, pdfFirstPage } from "@/lib/pdf-page";
 import { canonicalCrop, knownCrops } from "@/lib/crops";
 import {
   boxDownscale,
@@ -84,7 +85,8 @@ export function SketchImport(props: {
   const [length, setLength] = useState(fromFt(props.layout.lengthFt, props.layout.units));
   const [lengthTouched, setLengthTouched] = useState(false);
   const [mode, setMode] = useState<"replace" | "add">("replace");
-  const [background, setBackground] = useState(false);
+  // "Using page 1 of 3 from the PDF", or "Opening the PDF…" while it's being drawn.
+  const [pdfNote, setPdfNote] = useState("");
   const [reading, setReading] = useState<"idle" | "busy" | "done" | "off">("idle");
   const [scaleNote, setScaleNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -107,6 +109,7 @@ export function SketchImport(props: {
     setRows([]);
     setReading("idle");
     setScaleNote("");
+    setPdfNote("");
     setError("");
     setLengthTouched(false);
     setUnits(props.layout.units);
@@ -160,11 +163,26 @@ export function SketchImport(props: {
     if (!file) return;
     reset();
     try {
-      const image = await loadImage(file);
+      // A PDF plan is drawn to an image first (page 1), then treated like a photo.
+      let source: Blob = file;
+      if (isPdf(file)) {
+        setPdfNote("Opening the PDF…");
+        const { image: page, pages } = await pdfFirstPage(file);
+        source = page;
+        setPdfNote(pages > 1 ? `Using page 1 of ${pages} from the PDF.` : "");
+      }
+      const image = await loadImage(source);
       setImg(image);
       setPreviewUrl(scaled(image, 1400).toDataURL("image/jpeg", 0.85));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't open that image.");
+      setPdfNote("");
+      setError(
+        isPdf(file)
+          ? "Couldn't open that PDF. If it's password-protected or damaged, export the plan as a PNG or JPG instead."
+          : err instanceof Error
+            ? err.message
+            : "Couldn't open that image.",
+      );
     }
   }
 
@@ -331,7 +349,6 @@ export function SketchImport(props: {
           lengthFt,
           outline: outlineToFeet(detection, widthFt, lengthFt),
           beds,
-          backgroundDataUrl: background ? cropToFrame() : undefined,
         }),
       });
       const result = (await response.json()) as Result & { error?: string };
@@ -346,21 +363,6 @@ export function SketchImport(props: {
   }
 
   /** The drawing cut to the garden's edge, so it lines up behind the beds. */
-  function cropToFrame(): string | undefined {
-    if (!img || !detection) return undefined;
-    const k = img.naturalWidth / detection.width;
-    const f = detection.frame;
-    const canvas = document.createElement("canvas");
-    const scale = Math.min(1, 1400 / (f.w * k));
-    canvas.width = Math.round(f.w * k * scale);
-    canvas.height = Math.round(f.h * k * scale);
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, f.x * k, f.y * k, f.w * k, f.h * k, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.82);
-  }
-
   const groupCount = rows.length;
   const unitLabel = units === "m" ? "m" : "ft";
 
@@ -402,7 +404,7 @@ export function SketchImport(props: {
           </svg>
           <div>
             <p>
-              <strong>Drop in a drawing or diagram of the garden:</strong> a photo of a sketch, or an image from a drawing app.
+              <strong>Drop in a drawing or diagram of the garden:</strong> a photo of a sketch, an image from a drawing app, or a PDF.
             </p>
             <ul>
               <li>Draw each bed as a closed box, or a solid block of color.</li>
@@ -425,7 +427,7 @@ export function SketchImport(props: {
             <input
               ref={fileInput}
               type="file"
-              accept="image/*"
+              accept="image/*,application/pdf,.pdf"
               className="sr"
               onChange={(event) => {
                 void pick(event.target.files?.[0]);
@@ -509,7 +511,7 @@ export function SketchImport(props: {
               <input
                 ref={fileInput}
                 type="file"
-                accept="image/*"
+                accept="image/*,application/pdf,.pdf"
                 className="sr"
                 onChange={(event) => {
                   void pick(event.target.files?.[0]);
@@ -649,11 +651,7 @@ export function SketchImport(props: {
                 archived: off the map, history kept.
               </small>
             </fieldset>
-            <label className="sketch-bg">
-              <input type="checkbox" checked={background} onChange={(event) => setBackground(event.target.checked)} />
-              Show the drawing behind the map
-            </label>
-
+            {pdfNote ? <p className="sketch-note">{pdfNote}</p> : null}
             {error ? <p className="banner">{error}</p> : null}
             <button
               type="button"
@@ -666,6 +664,7 @@ export function SketchImport(props: {
           </div>
         </div>
       )}
+      {!img && pdfNote ? <p className="sketch-note">{pdfNote}</p> : null}
       {!img && error ? <p className="banner">{error}</p> : null}
     </dialog>
   );
