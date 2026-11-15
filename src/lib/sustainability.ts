@@ -13,8 +13,9 @@ import type { Bed, Planting } from "./types";
  * - Soil covered (35%): share of plot-days with something growing, weighted by plot area. Bare soil erodes and loses nutrients.
  * - Rotation kept (35%): share of plantings that didn't repeat a family grown in that plot the year before.
  * - Nitrogen (30%): share of plot area that ends the stretch "balanced" or "rich" on the nitrogen meter.
- * A plot counts from its first planting (the app doesn't record when plots were made), so a new plot
- * doesn't look bare in the years before it existed. Plots never planted don't count.
+ * A plot counts from Jan 1 of the year of its first planting (the app doesn't record when plots were made), so a
+ * new plot doesn't look bare in the years before it existed, and every year counts its winter. Plots never planted
+ * don't count. Rotation only counts plots with a record from the year before (otherwise there's nothing to compare).
  */
 export type Measure = {
   key: "cover" | "rotation" | "nitrogen";
@@ -94,8 +95,8 @@ export function yearScore(beds: Bed[], plantings: Planting[], year: number, endO
   for (const bed of beds) {
     const list = byBed.get(bed.id) ?? [];
     if (!list.length) continue;
-    const first = list.map((p) => p.planted_date).sort()[0];
-    const start = first > from ? first : from;
+    const firstYear = `${list.map((p) => p.planted_date).sort()[0].slice(0, 4)}-01-01`;
+    const start = firstYear > from ? firstYear : from;
     if (start > to) continue;
     const spans = list.map((p) => [p.planted_date, lastDay(p)] as const);
     const size = area(bed, fallback);
@@ -107,7 +108,11 @@ export function yearScore(beds: Bed[], plantings: Planting[], year: number, endO
   const cover = totalArea > 0 ? pct(coveredArea, totalArea) : null;
 
   // Rotation kept: plantings in the stretch whose family didn't grow in that plot the year before.
-  const planted = mine.filter((p) => p.planted_date >= from && p.planted_date <= to && !isPerennial(p.crop) && familyOf(p.crop));
+  // Plots with no record from the year before can't show rotation either way, so they're left out.
+  const hadLastYear = (bedId: string) => (byBed.get(bedId) ?? []).some((p) => p.season_year === year - 1);
+  const planted = mine.filter(
+    (p) => p.planted_date >= from && p.planted_date <= to && !isPerennial(p.crop) && familyOf(p.crop) && hadLastYear(p.bed_id),
+  );
   let kept = 0;
   for (const p of planted) {
     const family = familyOf(p.crop)!.family;

@@ -606,6 +606,10 @@ const BY_CROP: Record<string, string> = {
   herbs: "herb",
   mint: "herb",
   basil: "herb",
+  okra: "pod",
+  turnip: "radish",
+  zinnia: "flower",
+  sunflower: "flower",
   raspberry: "goldenberry",
   blackberry: "goldenberry",
   blueberry: "goldenberry",
@@ -637,6 +641,7 @@ const BY_FAMILY: Record<string, string> = {
   rose: "goldenberry",
   asparagus: "leafy",
   knotweed: "leafy",
+  mallow: "pod",
   heath: "goldenberry",
 };
 

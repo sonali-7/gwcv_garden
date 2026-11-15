@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "test": "tsx --test src/lib/*.test.ts",
-    "seed": "tsx src/lib/seed-cli.ts"
+    "seed": "tsx src/lib/seed-cli.ts",
+    "load-plans": "tsx src/lib/load-plans-cli.ts"
   },
   "dependencies": {
     "mongodb": "^6.20.0",

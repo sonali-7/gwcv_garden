@@ -117,7 +117,10 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
         </div>
       ) : null}
       <ul className="bed-rows">
-        {byHarvest(data.beds, advice, data.today).map((bed) => {
+        {byHarvest(data.beds, advice, data.today)
+          // Open plots already have their own green cards above; only looking back (no cards) lists them here.
+          .filter((bed) => props.mode === "past" || !open.includes(bed))
+          .map((bed) => {
           const a = advice.get(bed.id);
           const now = soonestHarvest(a?.current ?? [], data.today);
           const next = a?.planned[0];
