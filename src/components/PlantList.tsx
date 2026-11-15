@@ -61,6 +61,10 @@ export function PlantList(props: {
   onDeleteBed: (bed: Bed) => void;
   /** Take crops out of a patch: plans are deleted, anything planted is marked pulled on the date shown. */
   onRemove: (plantingIds: string[]) => void;
+  /** Confirm a plan was planted (today). Until then it doesn't count as in the ground. */
+  onConfirm: (plantingId: string) => void;
+  /** The real date, so overdue plans can be spotted while the timeline looks ahead. */
+  realToday: string;
 }) {
   const { selected } = props;
   return (
@@ -128,7 +132,7 @@ function Overview(props: Parameters<typeof PlantList>[0]) {
                     {now
                       ? statusLine(now, data.today) + (others.length ? ` · also ${others.join(", ")}` : "")
                       : next
-                        ? `${title(nextCrops.join(" + "))} planned for ${shortDate(next.planted_date)}`
+                        ? `${title(nextCrops.join(" + "))} planned for ${shortDate(next.planted_date)}${next.planted_date <= props.realToday ? " · not planted yet" : ""}`
                         : props.mode === "past"
                           ? "Empty"
                           : "Open"}
@@ -284,25 +288,45 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
       {a.planned.length ? (
         <section className="block">
           <h3>Planned</h3>
-          {a.planned.map((planting) => (
-          <div key={planting.id} className="growing planned">
-            <Sprite crop={planting.crop} sprites={data.sprites} size={28} ghost />
-            <div>
-              <strong>{title(planting.crop)}</strong>
-              <small>Planned for {shortDate(planting.planted_date, true)}</small>
-            </div>
-            <button
-              type="button"
-              className="texty small"
-              onClick={() => props.onRemove([planting.id])}
-              disabled={props.busy}
-              aria-label={`Remove planned ${planting.crop}`}
-            >
-              Remove
-            </button>
-          </div>
-          ))}
-          <p className="quiet small">When someone texts that they planted it, the plan becomes the real planting.</p>
+          {a.planned.map((planting) => {
+            const overdue = planting.planted_date <= props.realToday;
+            return (
+              <div key={planting.id} className={`growing planned${overdue ? " overdue" : ""}`}>
+                <Sprite crop={planting.crop} sprites={data.sprites} size={28} ghost />
+                <div>
+                  <strong>{title(planting.crop)}</strong>
+                  <small>
+                    Planned for {shortDate(planting.planted_date, true)}
+                    {overdue ? <em> · not planted yet</em> : null}
+                  </small>
+                </div>
+                <span className="plan-actions">
+                  <button
+                    type="button"
+                    className="pill small"
+                    onClick={() => props.onConfirm(planting.id)}
+                    disabled={props.busy}
+                    title={`Confirm the ${planting.crop} went in today`}
+                  >
+                    Mark planted
+                  </button>
+                  <button
+                    type="button"
+                    className="texty small"
+                    onClick={() => props.onRemove([planting.id])}
+                    disabled={props.busy}
+                    aria-label={`Remove planned ${planting.crop}`}
+                  >
+                    Remove
+                  </button>
+                </span>
+              </div>
+            );
+          })}
+          <p className="quiet small">
+            A plan only counts as planted once it's confirmed: someone texts that they planted it, or you click Mark
+            planted. Until then it stays a plan, even after its date.
+          </p>
         </section>
       ) : null}
 

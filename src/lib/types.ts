@@ -58,6 +58,12 @@ export type Planting = {
   season_year: number;
   days_to_maturity: number;
   source_session_id: string | null;
+  /**
+   * "planned": made in the garden view and not confirmed yet. It doesn't count as in the ground, even after its
+   * date, until someone texts that they planted it or clicks Mark planted. Missing means planted (older records,
+   * texts, imports).
+   */
+  status?: "planned" | "planted";
 };
 
 export type WorkSession = {

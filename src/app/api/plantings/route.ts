@@ -39,6 +39,8 @@ export async function POST(request: Request) {
     season_year: Number(date.slice(0, 4)),
     days_to_maturity: days,
     source_session_id: null,
+    // Anything dated after today is a plan until someone confirms it was planted.
+    ...(date > today ? { status: "planned" as const } : {}),
   };
   await store.insertPlanting(planting);
   return json(planting, 201);
