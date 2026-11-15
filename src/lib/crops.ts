@@ -48,6 +48,20 @@ const MATURITY_DAYS: Record<string, number> = {
   mint: 90,
   basil: 60,
   leeks: 120,
+  // Perennials: roughly the time to their first harvest. Their yearly seasons are in perennials.ts.
+  raspberry: 365,
+  blackberry: 365,
+  blueberry: 730,
+  strawberry: 365,
+  asparagus: 730,
+  rhubarb: 365,
+  rose: 365,
+  lavender: 365,
+  chives: 60,
+  rosemary: 90,
+  thyme: 90,
+  oregano: 90,
+  sage: 90,
 };
 
 const CANONICAL: Record<string, string> = {
@@ -111,6 +125,27 @@ const CANONICAL: Record<string, string> = {
   basil: "basil",
   leek: "leeks",
   leeks: "leeks",
+  raspberry: "raspberry",
+  raspberries: "raspberry",
+  blackberry: "blackberry",
+  blackberries: "blackberry",
+  blueberry: "blueberry",
+  blueberries: "blueberry",
+  strawberry: "strawberry",
+  strawberries: "strawberry",
+  asparagus: "asparagus",
+  rhubarb: "rhubarb",
+  rose: "rose",
+  roses: "rose",
+  "rose bush": "rose",
+  "rose bushes": "rose",
+  lavender: "lavender",
+  chive: "chives",
+  chives: "chives",
+  rosemary: "rosemary",
+  thyme: "thyme",
+  oregano: "oregano",
+  sage: "sage",
 };
 
 export function canonicalCrop(crop: string): string {

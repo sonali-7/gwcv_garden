@@ -1,3 +1,4 @@
+import { isPerennial } from "./perennials";
 import { addDays } from "./time";
 import type { Planting } from "./types";
 
@@ -30,7 +31,7 @@ export const CLEAR_AFTER_HARVEST_DAYS = 14;
  * Whether a planting is in the ground on `day`, as the garden timeline shows it.
  * Up to today this is the record as logged. After today, crops with no removal date
  * are assumed cleared two weeks after their expected harvest, so beds open up for planning.
- * Trees stay put.
+ * Perennials (trees, berries, asparagus, roses, woody herbs) stay put until someone pulls them.
  */
 export function inGroundOn(planting: Planting, day: string, today: string): boolean {
   if (isPlan(planting)) {
@@ -40,7 +41,7 @@ export function inGroundOn(planting: Planting, day: string, today: string): bool
   } else if (!isActive(planting, day)) {
     return false;
   }
-  if (day <= today || planting.removed_date || planting.crop.toLowerCase().includes("tree")) return true;
+  if (day <= today || planting.removed_date || isPerennial(planting.crop)) return true;
   return addDays(planting.expected_harvest_date, CLEAR_AFTER_HARVEST_DAYS) > day;
 }
 

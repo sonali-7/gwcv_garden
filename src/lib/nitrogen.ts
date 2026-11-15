@@ -1,4 +1,5 @@
 import { familyOf } from "./crops";
+import { isPerennial } from "./perennials";
 import { addDays } from "./time";
 import type { Planting } from "./types";
 
@@ -10,6 +11,7 @@ import type { Planting } from "./types";
  *   nitrogen fixers (beans, peas, clover) +2, heavy feeders (tomatoes, corn, squash, cabbage…) −2,
  *   medium feeders (lettuce, spinach, beets) −1, light feeders 0.
  * Crops from the last year count fully; the year before counts half.
+ * Perennials count again for every year they're in the ground: a raspberry patch feeds every summer.
  */
 export type NitrogenLevel = "low" | "balanced" | "rich";
 
@@ -49,10 +51,19 @@ export function nitrogenBalance(plantings: Planting[], day: string, today = day)
   const effects: NitrogenEffect[] = [];
   let score = 0;
   for (const planting of plantings) {
-    if (!grewBy(planting, day, today) || planting.planted_date <= twoYearsAgo) continue;
+    if (!grewBy(planting, day, today)) continue;
     const full = nitrogenChange(planting.crop);
     if (!full) continue;
-    const change = planting.planted_date > yearAgo ? full : full / 2;
+    let change: number;
+    if (isPerennial(planting.crop)) {
+      // In the ground during the last year counts fully, during the year before counts half.
+      const gone = planting.removed_date ?? "9999-12-31";
+      change = (gone > yearAgo ? full : 0) + (planting.planted_date <= yearAgo && gone > twoYearsAgo ? full / 2 : 0);
+    } else {
+      if (planting.planted_date <= twoYearsAgo) continue;
+      change = planting.planted_date > yearAgo ? full : full / 2;
+    }
+    if (!change) continue;
     score += change;
     effects.push({ crop: planting.crop, planted_date: planting.planted_date, change });
   }

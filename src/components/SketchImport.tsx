@@ -16,6 +16,7 @@ import {
 import type { SketchLabels } from "@/lib/sketch-labels";
 import type { GardenLayout } from "@/lib/types";
 import { fromFt, toFt, type Units } from "@/lib/units";
+import { isPerennial } from "@/lib/perennials";
 
 type Row = { name: string; crops: string; include: boolean };
 type Result = { created: number; moved: number; removed: number; planted: number; archived: string[] };
@@ -50,6 +51,11 @@ function splitCrops(text: string): string[] {
     .split(/[,/;+&]| and /i)
     .map((c) => c.trim().toLowerCase())
     .filter((c) => c && c !== "nothing");
+}
+
+/** The perennials named in a row's crops, so the row can say they'll stay put. */
+function perennialsIn(text: string): string[] {
+  return [...new Set(splitCrops(text).map(canonicalCrop).filter(isPerennial))];
 }
 
 /** Repeated names ("Kale", "Kale") get numbers so each bed can be told apart. */
@@ -591,6 +597,9 @@ export function SketchImport(props: {
                         <small>
                           {ft.map((g) => `${fromFt(g.w, units)}×${fromFt(g.h, units)} ${unitLabel}`).join(" + ")}
                           {parts.length > 1 ? " (L-shape, saved as two beds)" : ""}
+                          {perennialsIn(row.crops).length
+                            ? ` · ${perennialsIn(row.crops).join(", ")}: perennial, stays planted year to year`
+                            : ""}
                         </small>
                       </div>
                       <label className="keep">
