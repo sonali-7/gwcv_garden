@@ -2,6 +2,7 @@ import { buildTasks } from "./priority";
 import { toPublicPerson, type DashboardData } from "./types";
 import { gardenTz, startOfWeekYmd, todayYmd } from "./time";
 import type { Store } from "./store";
+import { gardenRain } from "./weather";
 
 export async function loadDashboard(store: Store, weekStart: string | null, now = new Date()): Promise<DashboardData> {
   const timeZone = gardenTz();
@@ -16,7 +17,7 @@ export async function loadDashboard(store: Store, weekStart: string | null, now 
   ]);
   // Tasks are derived from plantings/sessions; no need to write them on every page load
   // (that raced with other tabs on Mongo _id). GET /api/tasks still persists when asked.
-  const tasks = buildTasks({ now, beds, plantings, sessions, timeZone });
+  const tasks = buildTasks({ now, beds, plantings, sessions, timeZone, rain: await gardenRain(store) });
 
   const threads: DashboardData["threads"] = {};
   for (const person of people) {

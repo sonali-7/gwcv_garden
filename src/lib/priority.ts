@@ -10,6 +10,7 @@ import {
   zonedToUtc,
 } from "./time";
 import type { Bed, Planting, Task, WorkSession } from "./types";
+import { lastSoaking, soakingTomorrow, type Rain } from "./weather";
 
 export const WATER_AFTER_DAYS = 3;
 export const HARVEST_WINDOW_DAYS = 21;
@@ -20,11 +21,19 @@ export function buildTasks(input: {
   plantings: Planting[];
   sessions: WorkSession[];
   timeZone?: string;
+  /**
+   * Rain near the garden (see weather.ts), when known. A soaking counts as a watering, and a soaking due tomorrow
+   * means watering can wait. Without it, watering goes by logged sessions only.
+   */
+  rain?: Rain | null;
 }): Task[] {
   const timeZone = input.timeZone ?? gardenTz();
   const today = todayYmd(input.now, timeZone);
   const tasks: Task[] = [];
   const active = activePlantings(input.plantings, today);
+  const soaked = input.rain ? lastSoaking(input.rain, today) : null;
+  const rainDays = soaked ? calendarDaysBetween(soaked.date, today) : null;
+  const rainComing = input.rain ? soakingTomorrow(input.rain, addDays(today, 1)) : null;
 
   for (const planting of active) {
     const bed = input.beds.find((item) => item.id === planting.bed_id) ?? null;
@@ -37,16 +46,19 @@ export function buildTasks(input: {
       .sort((a, b) => new Date(a.end).getTime() - new Date(b.end).getTime());
     const last = waters.at(-1);
     const days = last ? calendarDaysBetween(todayYmd(new Date(last.end), timeZone), today) : null;
-    if (days === null || days >= WATER_AFTER_DAYS) {
+    // Rain since the last logged watering counts too; rain due tomorrow means it can wait.
+    const sinceWater = rainDays !== null && (days === null || rainDays < days) ? rainDays : days;
+    if ((sinceWater === null || sinceWater >= WATER_AFTER_DAYS) && !rainComing) {
+      const logged =
+        days === null ? "No watering has been logged for this planting." : `Last watered ${days === 1 ? "1 day" : `${days} days`} ago.`;
       tasks.push({
         id: `water:${planting.id}`,
         type: "water",
         severity: "urgent",
         title: `${cropTitle(planting.crop)} needs watering`,
-        detail:
-          days === null
-            ? "No watering has been logged for this planting."
-            : `Last watered ${days === 1 ? "1 day" : `${days} days`} ago.`,
+        detail: input.rain
+          ? `${logged} ${soaked ? `Last good rain ${rainDays === 0 ? "today" : rainDays === 1 ? "yesterday" : `${rainDays} days ago`} (${Math.round(soaked.mm)} mm).` : "No good rain this past week."}`
+          : logged,
         due_date: input.now.toISOString(),
         planting_id: planting.id,
         bed_id: planting.bed_id,

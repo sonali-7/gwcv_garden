@@ -5,6 +5,7 @@ import { buildTasks } from "./priority";
 import type { Store } from "./store";
 import { gardenTz, todayYmd } from "./time";
 import { toPublicPerson, type Bed, type GardenLayout, type Photo, type Planting, type PublicPerson, type Task, type WorkSession } from "./types";
+import { rainNear } from "./weather";
 
 export type GardenData = {
   today: string;
@@ -54,7 +55,7 @@ export async function loadGarden(store: Store, now = new Date()): Promise<Garden
     plantings,
     sessions,
     photos,
-    tasks: buildTasks({ now, beds, plantings, sessions, timeZone }),
+    tasks: buildTasks({ now, beds, plantings, sessions, timeZone, rain: await rainNear(layout.location ?? "") }),
     sprites,
   };
 }
