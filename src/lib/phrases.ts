@@ -24,7 +24,8 @@ export function workPhrase(
     case "meeting":
       return "came to the weekly meeting";
     default:
-      return crop ? `worked on ${crop}` : "logged garden work";
+      if (crop) return `worked on ${crop}`;
+      return bed ? `came to the garden (${bed})` : "came to the garden";
   }
 }
 
@@ -50,7 +51,8 @@ export function planPhrase(
     case "meeting":
       return "weekly meeting";
     default:
-      return crop ? `work on ${crop}` : "garden work";
+      if (crop) return `work on ${crop}`;
+      return bed ? `come to the garden (${bed})` : "come to the garden";
   }
 }
 
@@ -69,7 +71,7 @@ export function eventSubtitle(activity: ActivityType, crop: string | null): stri
     case "meeting":
       return "meeting";
     default:
-      return crop ? crop : "garden work";
+      return crop ? crop : "garden visit";
   }
 }
 

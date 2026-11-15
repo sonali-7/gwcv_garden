@@ -657,14 +657,14 @@ h1 {
 .plan-preview {
   margin: 0 10px 12px;
   padding: 10px 12px;
-  background: #f3f8ea;
+  background: #f7f1e4;
   border: 1.5px solid var(--ink-line);
   box-shadow: 2px 2px 0 var(--ink-line);
   font-family: inherit;
   font-size: 12px;
   line-height: 1.4;
   white-space: pre-wrap;
-  max-height: 160px;
+  max-height: 200px;
   overflow: auto;
 }
 

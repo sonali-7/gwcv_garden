@@ -115,11 +115,11 @@ function bedsFromCrops(hay: string, pool: Bed[], allBeds: Bed[], active: Plantin
   return preferSpecificBeds(hits);
 }
 
-/** "plot 8" matches bed "Plot 8" even with odd spacing. */
+/** "plot 8" / "row 8" matches bed "Plot 8" even with odd spacing. */
 function loosePlotMatch(hay: string, key: string): boolean {
   const plot = key.match(/^plot\s+(\d+[a-z]?)$/);
   if (!plot) return false;
-  return new RegExp(`(?:^|\\s)plot\\s*${plot[1]}(?:\\s|$)`).test(` ${hay} `);
+  return new RegExp(`(?:^|\\s)(?:plot|row)\\s*${plot[1]}(?:\\s|$)`).test(` ${hay} `);
 }
 
 /** Drop shorter bed names that only matched because they sit inside a longer hit. */
