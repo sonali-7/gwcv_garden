@@ -2926,6 +2926,18 @@ h1 {
 .eco-change.down {
   color: #9a5a0c;
 }
+.eco-co2 {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--green, #3b7d3b) 8%, transparent);
+}
+.eco-co2 p {
+  margin: 0;
+}
+.eco-co2 p + p {
+  margin-top: 2px;
+}
 .eco-reasons {
   margin: 8px 0 0;
   padding-left: 18px;
