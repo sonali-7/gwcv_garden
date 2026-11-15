@@ -259,3 +259,23 @@ export function mapFitting(areas: GardenArea[], widthFt: number, lengthFt: numbe
     lengthFt: r1(Math.max(lengthFt, ...areas.map((a) => a.y + a.h))),
   };
 }
+
+/**
+ * The map trimmed to what's on it (the areas and any plots), so deleting an area leaves no empty grass behind:
+ * how far to shift everything left/up (dx, dy ≤ 0) and the new size.
+ */
+export function fitMap(areas: GardenArea[], beds: Bed[]): { dx: number; dy: number; widthFt: number; lengthFt: number } | null {
+  const boxes: Rect[] = [...areas, ...beds.flatMap((bed) => (bed.geometry ? [bed.geometry] : []))];
+  if (!boxes.length) return null;
+  const minX = Math.min(...boxes.map((b) => b.x));
+  const minY = Math.min(...boxes.map((b) => b.y));
+  const maxX = Math.max(...boxes.map((b) => b.x + b.w));
+  const maxY = Math.max(...boxes.map((b) => b.y + b.h));
+  return {
+    // "|| 0" turns -0 (no shift) into a plain 0.
+    dx: r1(-Math.max(0, minX)) || 0,
+    dy: r1(-Math.max(0, minY)) || 0,
+    widthFt: r1(Math.max(MIN_FT, maxX - Math.max(0, minX))),
+    lengthFt: r1(Math.max(MIN_FT, maxY - Math.max(0, minY))),
+  };
+}

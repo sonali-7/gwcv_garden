@@ -1,5 +1,5 @@
 import { getStore } from "@/lib/db";
-import { addArea, AREA_MAX_FT, areaFits, areasOf, bedsInArea, cleanPoints, mapFitting, reshapeArea, resizeArea, shiftArea } from "@/lib/garden-areas";
+import { addArea, AREA_MAX_FT, areaFits, areasOf, bedsInArea, cleanPoints, fitMap, mapFitting, reshapeArea, resizeArea, shiftArea } from "@/lib/garden-areas";
 import { json, noContent } from "@/lib/http";
 import type { GardenLayout } from "@/lib/types";
 
@@ -19,7 +19,7 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
  *   { action: "resize", id, w, h }          resize from its top-left corner
  *   { action: "reshape", id, outline }      new corners for its shape ([x, y] feet)
  *   { action: "rename", id, name }
- *   { action: "delete", id }                only when no plots are in it
+ *   { action: "delete", id }                only when no plots are in it; the map then shrinks to what's left
  */
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
@@ -94,9 +94,24 @@ export async function POST(request: Request) {
     if (inside.length) {
       return json({ error: `${area.name} still has ${inside.length} plot${inside.length === 1 ? "" : "s"} in it. Move or delete them first.` }, 409);
     }
-    const rest = areas.filter((item) => item.id !== area.id);
+    let rest = areas.filter((item) => item.id !== area.id);
     const next: GardenLayout = { ...layout, areas: rest };
     if (!rest.length) delete next.areas;
+    // Trim the map to what's left so no empty grass remains where the area was: shift everything up/left if the
+    // space was there, and shrink the size. With no areas left, the garden keeps its size.
+    const fit = rest.length ? fitMap(rest, (await store.listBeds()).filter((b) => !b.archived)) : null;
+    if (fit) {
+      if (fit.dx || fit.dy) {
+        rest = rest.map((item) => shiftArea(item, fit.dx, fit.dy));
+        next.areas = rest;
+        for (const bed of (await store.listBeds()).filter((b) => !b.archived && b.geometry)) {
+          const g = bed.geometry!;
+          await store.updateBed({ ...bed, geometry: { ...g, x: r1(g.x + fit.dx), y: r1(g.y + fit.dy) } });
+        }
+      }
+      next.widthFt = fit.widthFt;
+      next.lengthFt = fit.lengthFt;
+    }
     await store.saveLayout(next);
     return json(next);
   }

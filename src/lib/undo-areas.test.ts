@@ -135,3 +135,19 @@ describe("reshaping areas", async () => {
     assert.ok(!areaFits(reshapeArea(b, [[2, 2], [12, 2], [12, 12], [2, 12]]), [slanted, b], 40, 30), "covers A's ground");
   });
 });
+
+describe("trimming the map after deleting an area", async () => {
+  const { fitMap } = await import("./garden-areas");
+  it("shrinks to the areas and plots that are left", () => {
+    const left = { id: "a", name: "A", x: 0, y: 0, w: 49.2, h: 61.4, outline: null };
+    assert.deepEqual(fitMap([left], [bed("p", 2, 3)]), { dx: 0, dy: 0, widthFt: 49.2, lengthFt: 61.4 });
+  });
+  it("shifts everything over when the empty space was on the left or top", () => {
+    const right = { id: "b", name: "B", x: 53.2, y: 4, w: 20, h: 15, outline: null };
+    assert.deepEqual(fitMap([right], [bed("p", 55, 6)]), { dx: -53.2, dy: -4, widthFt: 20, lengthFt: 15 });
+  });
+  it("keeps a plot that sits outside the areas", () => {
+    const a = { id: "a", name: "A", x: 0, y: 0, w: 10, h: 10, outline: null };
+    assert.equal(fitMap([a], [bed("p", 30, 2)])!.widthFt, 34);
+  });
+});
