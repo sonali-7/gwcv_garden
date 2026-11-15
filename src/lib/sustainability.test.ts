@@ -26,7 +26,7 @@ describe("sustainability score", () => {
     assert.deepEqual(stretch(2027, "2028-02-29"), { from: "2027-01-01", to: "2027-02-28" });
   });
 
-  it("measures soil cover by plot area, starting from each plot's first planting", () => {
+  it("measures soil cover by plot area, from the start of each plot's first year", () => {
     const beds = [plot("a", 10, 10), plot("b", 10, 10)];
     // a: covered all of Jan 1–Jan 10 (the stretch). b: first planted Jan 6, covered Jan 6–Jan 7, then bare.
     const plantings = [
@@ -35,16 +35,20 @@ describe("sustainability score", () => {
     ];
     const s = yearScore(beds, plantings, 2026, "2026-01-10");
     const cover = s.measures.find((m) => m.key === "cover")!;
-    // a: 10 of 10 days; b: 2 of 5 days (Jan 6–10). Same area: 12 / 15 = 80%.
-    assert.equal(cover.score, 80);
+    // a: 10 of 10 days; b: 2 of 10 days (it counts from Jan 1 of its first year). Same area: 12 / 20 = 60%.
+    assert.equal(cover.score, 60);
+    // A plot first planted in 2026 doesn't count in 2025.
+    assert.equal(yearScore(beds, plantings, 2025, "2026-01-10").measures[0].score, null);
   });
 
   it("counts rotation as plantings that didn't repeat last year's family in that plot", () => {
-    const beds = [plot("a"), plot("b")];
+    const beds = [plot("a"), plot("b"), plot("c")];
     const plantings = [
       grew("a", "tomatoes", "2025-05-01", "2025-08-01"),
       grew("a", "pepper", "2026-05-01", "2026-08-01"), // nightshade again: not rotated
+      grew("b", "corn", "2025-05-01", "2025-08-01"),
       grew("b", "beans", "2026-05-01", "2026-07-01"),
+      grew("c", "corn", "2026-05-01", "2026-08-01"), // no record from 2025: left out
     ];
     const rotation = yearScore(beds, plantings, 2026, "2026-11-14").measures.find((m) => m.key === "rotation")!;
     assert.equal(rotation.score, 50);

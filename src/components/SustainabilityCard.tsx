@@ -80,7 +80,8 @@ export function SustainabilityCard(props: { beds: Bed[]; plantings: Planting[]; 
         <p className="quiet small">
           Soil covered (35%): how much of the time plots had something growing. Rotation kept (35%): plantings that didn&apos;t
           repeat a family grown in that plot the year before. Healthy nitrogen (30%): plot area that isn&apos;t low on
-          nitrogen. A plot counts from its first planting. When last year scored under {PERCENT_FROM}, the change is shown in points,
+          nitrogen. A plot counts from the year it was first planted, and rotation only counts plots with a record from the
+          year before. When last year scored under {PERCENT_FROM}, the change is shown in points,
           since a percentage of a small number exaggerates it. {change === null ? `It compares once ${previous.year} has at least ${MIN_PLANTINGS} plantings.` : ""}
         </p>
       </details>
