@@ -55,6 +55,7 @@ import type {
   WorkSession,
 } from "./types";
 import { blankConversation } from "./types";
+import { gardenRain } from "./weather";
 
 const PALETTE = ["#3e6fd8", "#8a63c4", "#d4533c", "#2f8f6b", "#c9842a", "#3d7a8c", "#b4557a"];
 const DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -963,6 +964,7 @@ async function wateringText(store: Store, now: Date, timeZone: string): Promise<
     plantings: await store.listPlantings(),
     sessions: await store.listSessions(),
     timeZone,
+    rain: await gardenRain(store),
   });
   const water = tasks.filter((task) => task.type === "water");
   if (water.length === 0) return "Nothing needs watering right now.";

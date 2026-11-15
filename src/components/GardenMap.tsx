@@ -332,8 +332,6 @@ export function GardenMap(props: {
             : nextPlanned.length
               ? `${shownCrops.join(" + ")} planned`
               : "open";
-          // Beds drawn from a plan are often named after their crops; don't say it twice.
-          const sayCrops = !shownCrops.length || !shownCrops.every((c) => bed.name.toLowerCase().includes(c.slice(0, 4)));
           const bedPxH = g.h * pxPerFt;
           const compact = bedPxH < 48;
           // Lay the drawings out at normal size, then scale by the zoom.
@@ -350,7 +348,6 @@ export function GardenMap(props: {
           const urgent = tasks.find((task) => task.severity === "urgent");
           const upcoming = tasks.find((task) => task.severity === "upcoming");
           const state = crop ? "growing" : planned.length ? "planned" : "open";
-          const tall = !compact && (g.h / layout.lengthFt > 0.12 || g.w / layout.widthFt > 0.3);
           return (
             <div
               key={bed.id}
@@ -421,9 +418,9 @@ export function GardenMap(props: {
                   })}
                 </span>
               ) : null}
+              {/* Same size tag on every plot: just the name. The crops show in the tooltip and the plant list. */}
               <span className="bed-label">
                 <strong>{bed.name}</strong>
-                {tall && sayCrops ? <em>{cropText}</em> : null}
               </span>
               <span className="bed-flags">
                 {urgent ? (

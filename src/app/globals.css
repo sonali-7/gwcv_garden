@@ -1612,7 +1612,8 @@ h1 {
   align-items: flex-start;
   justify-content: space-between;
   padding: 4px;
-  overflow: hidden;
+  /* Visible so a name tag can stick out past a small plot; the plant drawings clip themselves below. */
+  overflow: visible;
 }
 
 .bed-crops {
@@ -1622,6 +1623,8 @@ h1 {
   justify-content: space-evenly;
   align-content: space-evenly;
   pointer-events: none;
+  /* The plot itself no longer clips (so name tags can stick out), so the drawings clip here. */
+  overflow: hidden;
 }
 
 .bed-crops img {
@@ -1685,15 +1688,6 @@ h1 {
   align-items: center;
 }
 
-.bed.compact .bed-label {
-  padding: 0 4px;
-  border-width: 1.5px;
-  box-shadow: 1px 1px 0 #4a2f18;
-}
-
-.bed.compact .bed-label strong {
-  font-size: 11px;
-}
 
 .bed.compact .flag {
   width: 16px;
@@ -1758,6 +1752,11 @@ h1 {
   opacity: 1;
 }
 
+.bed:hover .bed-label,
+.bed:focus-visible .bed-label {
+  z-index: 2;
+}
+
 .map-surface.editing .bed {
   outline: 1.5px dashed rgba(255, 243, 176, 0.75);
 }
@@ -1774,17 +1773,17 @@ h1 {
   cursor: grabbing;
 }
 
+/* Name tags are the same size on every plot and never cut the name short; on a small plot the tag sticks out. */
 .bed-label {
   position: relative;
   z-index: 1;
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   background: #f2d9a0;
   border: 2px solid #4a2f18;
   box-shadow: 2px 2px 0 #4a2f18;
   padding: 1px 6px 2px;
-  max-width: 100%;
-  min-width: 0;
   font-family: var(--font-pixel), ui-monospace, monospace;
 }
 
@@ -1793,8 +1792,12 @@ h1 {
   font-weight: 600;
   line-height: 1.15;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* The plot being pointed at (or selected) sits above its neighbors, so its tag isn't hidden under them. */
+.bed:hover,
+.bed:focus-visible {
+  z-index: 6;
 }
 
 .bed-label em {
@@ -1814,12 +1817,14 @@ h1 {
   margin-top: 4px;
 }
 
+/* Pinned to the plot's top-right corner, so a long name tag never pushes them off the plot. */
 .bed-flags {
-  position: relative;
+  position: absolute;
+  top: 3px;
+  right: 3px;
   z-index: 1;
   display: flex;
   gap: 2px;
-  flex: 0 0 auto;
 }
 
 .flag {
@@ -2107,23 +2112,24 @@ h1 {
   gap: 8px;
 }
 
-.growing {
+/* "growing" is also a plot class on the map, so these stay inside the plant list. */
+.plant-list .growing {
   display: flex;
   gap: 10px;
   align-items: flex-start;
   margin-bottom: 8px;
 }
 
-.growing div {
+.plant-list .growing div {
   flex: 1;
 }
 
-.growing strong {
+.plant-list .growing strong {
   display: block;
   font-size: 15px;
 }
 
-.growing small {
+.plant-list .growing small {
   display: block;
   color: var(--muted);
   font-size: 12.5px;
@@ -2718,7 +2724,7 @@ h1 {
 /* ---------- Plans waiting to be confirmed ---------- */
 .plan-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; }
 .pill.small { padding: 3px 10px; font-size: 12.5px; }
-.growing.overdue small em { font-style: normal; color: #b0631a; font-weight: 600; }
+.plant-list .growing.overdue small em { font-style: normal; color: #b0631a; font-weight: 600; }
 
 /* Soil nitrogen in the plot panel: a low-to-rich meter with a marker. */
 .nitrogen h3 {
