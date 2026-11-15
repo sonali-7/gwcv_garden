@@ -1612,7 +1612,8 @@ h1 {
   align-items: flex-start;
   justify-content: space-between;
   padding: 4px;
-  overflow: hidden;
+  /* Visible so a name tag can stick out past a small plot; the plant drawings clip themselves below. */
+  overflow: visible;
 }
 
 .bed-crops {
@@ -1622,6 +1623,8 @@ h1 {
   justify-content: space-evenly;
   align-content: space-evenly;
   pointer-events: none;
+  /* The plot itself no longer clips (so name tags can stick out), so the drawings clip here. */
+  overflow: hidden;
 }
 
 .bed-crops img {
@@ -1685,15 +1688,6 @@ h1 {
   align-items: center;
 }
 
-.bed.compact .bed-label {
-  padding: 0 4px;
-  border-width: 1.5px;
-  box-shadow: 1px 1px 0 #4a2f18;
-}
-
-.bed.compact .bed-label strong {
-  font-size: 11px;
-}
 
 .bed.compact .flag {
   width: 16px;
@@ -1758,6 +1752,11 @@ h1 {
   opacity: 1;
 }
 
+.bed:hover .bed-label,
+.bed:focus-visible .bed-label {
+  z-index: 2;
+}
+
 .map-surface.editing .bed {
   outline: 1.5px dashed rgba(255, 243, 176, 0.75);
 }
@@ -1774,17 +1773,17 @@ h1 {
   cursor: grabbing;
 }
 
+/* Name tags are the same size on every plot and never cut the name short; on a small plot the tag sticks out. */
 .bed-label {
   position: relative;
   z-index: 1;
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   background: #f2d9a0;
   border: 2px solid #4a2f18;
   box-shadow: 2px 2px 0 #4a2f18;
   padding: 1px 6px 2px;
-  max-width: 100%;
-  min-width: 0;
   font-family: var(--font-pixel), ui-monospace, monospace;
 }
 
@@ -1793,8 +1792,12 @@ h1 {
   font-weight: 600;
   line-height: 1.15;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* The plot being pointed at (or selected) sits above its neighbors, so its tag isn't hidden under them. */
+.bed:hover,
+.bed:focus-visible {
+  z-index: 6;
 }
 
 .bed-label em {
@@ -1814,12 +1817,14 @@ h1 {
   margin-top: 4px;
 }
 
+/* Pinned to the plot's top-right corner, so a long name tag never pushes them off the plot. */
 .bed-flags {
-  position: relative;
+  position: absolute;
+  top: 3px;
+  right: 3px;
   z-index: 1;
   display: flex;
   gap: 2px;
-  flex: 0 0 auto;
 }
 
 .flag {
@@ -2107,23 +2112,24 @@ h1 {
   gap: 8px;
 }
 
-.growing {
+/* "growing" is also a plot class on the map, so these stay inside the plant list. */
+.plant-list .growing {
   display: flex;
   gap: 10px;
   align-items: flex-start;
   margin-bottom: 8px;
 }
 
-.growing div {
+.plant-list .growing div {
   flex: 1;
 }
 
-.growing strong {
+.plant-list .growing strong {
   display: block;
   font-size: 15px;
 }
 
-.growing small {
+.plant-list .growing small {
   display: block;
   color: var(--muted);
   font-size: 12.5px;
@@ -2718,7 +2724,7 @@ h1 {
 /* ---------- Plans waiting to be confirmed ---------- */
 .plan-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; }
 .pill.small { padding: 3px 10px; font-size: 12.5px; }
-.growing.overdue small em { font-style: normal; color: #b0631a; font-weight: 600; }
+.plant-list .growing.overdue small em { font-style: normal; color: #b0631a; font-weight: 600; }
 
 /* Soil nitrogen in the plot panel: a low-to-rich meter with a marker. */
 .nitrogen h3 {
@@ -2961,4 +2967,152 @@ h1 {
 }
 .eco-more dd .detail {
   display: block;
+}
+
+/* Growing areas: a name tag above each area's top-left corner; in Edit layout it's the handle to move the area. */
+.area-tag {
+  position: absolute;
+  z-index: 7;
+  transform: translateY(calc(-100% - 4px));
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 2px;
+  background: #fff3c4;
+  border: 2px solid #4a2f18;
+  box-shadow: 2px 2px 0 #4a2f18;
+  font-family: var(--font-pixel), ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.area-tag.editing {
+  pointer-events: auto;
+  cursor: grab;
+}
+.area-tag.editing:active {
+  cursor: grabbing;
+}
+.area-name-input {
+  font: inherit;
+  width: 12ch;
+  border: 0;
+  background: #fffaf2;
+  padding: 0 2px;
+}
+.area-delete {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  color: #8a3b1c;
+}
+.area-delete:disabled {
+  opacity: 0.4;
+}
+.area-resize {
+  position: absolute;
+  z-index: 7;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  background: #ffe066;
+  border: 2px solid #4a2f18;
+  cursor: nwse-resize;
+}
+
+/* Undo sits beside Edit layout. */
+.pill.undo:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Area names splitting the plant list when the map has several growing areas. */
+.bed-rows .area-heading {
+  margin: 10px 0 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* A plant whose profile came from Gemini. */
+.from-gemini {
+  margin-left: 6px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #4b6bd8 14%, transparent);
+  color: #3550b0;
+  vertical-align: 1px;
+}
+
+/* Reshaping in Edit layout: corner squares to drag (double-click removes one), edge dots to add a corner. */
+.shape-corner,
+.shape-mid {
+  position: absolute;
+  z-index: 8;
+  transform: translate(-50%, -50%);
+  touch-action: none;
+}
+.shape-corner {
+  width: 12px;
+  height: 12px;
+  background: #ffe066;
+  border: 2px solid #4a2f18;
+  cursor: move;
+}
+.shape-mid {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 243, 196, 0.85);
+  border: 1.5px solid #4a2f18;
+  cursor: copy;
+  opacity: 0.75;
+}
+.shape-mid:hover {
+  opacity: 1;
+}
+/* In Edit layout an area's soil is a handle too: drag it to move the area. */
+.lawn.movable {
+  pointer-events: auto;
+  cursor: grab;
+}
+.lawn.movable:active {
+  cursor: grabbing;
+}
+
+/* Side grab strips for reshaping: invisible, a little wider than the line, shown on hover. */
+.shape-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.shape-edges line {
+  stroke: transparent;
+  stroke-width: 12px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  touch-action: none;
+}
+.shape-edges line:hover {
+  stroke: rgba(255, 224, 102, 0.55);
+}
+/* The area picked in Edit layout: Delete removes it. */
+.lawn-edge polygon.selected {
+  stroke: #ffe066;
+  stroke-width: 4px;
+}
+.area-tag.selected {
+  background: #ffe066;
 }

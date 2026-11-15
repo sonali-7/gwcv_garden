@@ -4,6 +4,7 @@ import { buildPersonalTexts, runPlanAgent, type PersonalPlanText, type PlanAssig
 import { photonDailyLimit, photonReply, sendPhotonText } from "./photon";
 import { buildTasks } from "./priority";
 import type { Store } from "./store";
+import { gardenRain } from "./weather";
 import {
   addDays,
   gardenTz,
@@ -113,7 +114,7 @@ export async function liveTasks(store: Store, now = new Date()): Promise<Task[]>
     store.listSessions(),
     store.listTasks(),
   ]);
-  return mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone }), saved);
+  return mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone, rain: await gardenRain(store) }), saved);
 }
 
 /**
@@ -141,7 +142,7 @@ export async function reconcilePriorityTasks(store: Store, now = new Date()): Pr
   }
 
   const cleanedPlantings = await store.listPlantings();
-  const computed = buildTasks({ now, beds, plantings: cleanedPlantings, sessions, timeZone });
+  const computed = buildTasks({ now, beds, plantings: cleanedPlantings, sessions, timeZone, rain: await gardenRain(store) });
   const tasks = mergeTaskState(computed, saved).filter((task) => task.status !== "done" && task.status !== "rejected");
   await store.saveTasks(tasks);
   return tasks;
@@ -163,11 +164,9 @@ export async function proposeWeekPlan(store: Store, now = new Date()): Promise<W
     store.listPeople(),
     store.listTasks(),
   ]);
-  const merged = mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone }), saved);
+  const merged = mergeTaskState(buildTasks({ now, beds, plantings, sessions, timeZone, rain: await gardenRain(store) }), saved);
   const baseTasks = merged.map((task) => {
-    if (task.status === "claimed" && task.assignee_id) {
-      return { ...task, source: "planner" as const, suggested_assignee_id: null };
-    }
+    if (task.status === "claimed" && task.assignee_id) return { ...task, source: "planner" as const };
     return {
       ...task,
       status: "proposed" as const,
@@ -231,14 +230,16 @@ export async function approveAndSendPlan(store: Store, now = new Date()): Promis
   const tasks = live.map((task) => (task.status === "claimed" ? task : { ...task, status: "approved" as const }));
   await store.saveTasks(tasks);
 
+
+
   const plannedSessions = preview?.plannedSessions ?? upcomingPlannedSessions(sessions, now, weekStart, timeZone);
   const visitorIds = new Set(plannedSessions.map((session) => session.person_id));
   const visitors = people.filter((person) => visitorIds.has(person.id));
   const texted = await volunteersWhoTexted(store);
   const recipients = preview
     ? preview.recipients
-        .map((item) => people.find((person) => person.id === item.id))
-        .filter((person): person is Person => Boolean(person))
+      .map((item) => people.find((person) => person.id === item.id))
+      .filter((person): person is Person => Boolean(person))
     : visitors.filter((person) => texted.some((item) => item.id === person.id));
 
   const assignments: PlanAssignment[] = tasks
@@ -253,19 +254,19 @@ export async function approveAndSendPlan(store: Store, now = new Date()): Promis
     preview?.personalTexts?.length
       ? preview.personalTexts
       : buildPersonalTexts(
-          {
-            weekStart,
-            weekEnd: addDays(weekStart, 6),
-            timeZone,
-            tasks,
-            visitors,
-            sessions: plannedSessions,
-            beds,
-            plantings,
-            recipients,
-          },
-          assignments,
-        );
+        {
+          weekStart,
+          weekEnd: addDays(weekStart, 6),
+          timeZone,
+          tasks,
+          visitors,
+          sessions: plannedSessions,
+          beds,
+          plantings,
+          recipients,
+        },
+        assignments,
+      );
 
   // Never fall back to a shared organizer summary — that made every thread look identical.
   const byPerson = new Map(personalTexts.map((item) => [item.personId, item.text]));

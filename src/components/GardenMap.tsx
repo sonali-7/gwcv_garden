@@ -1,15 +1,30 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { allowedMove, allowedResize } from "@/lib/bed-space";
+import { AREA_MAX_FT, areaFits, areaPolygon, areasOf, bedsInArea, reshapeArea, resizeArea, selfCrossing, shiftArea, type AreaAction } from "@/lib/garden-areas";
 import { spriteDataUrl, spriteUrl, TILES } from "@/lib/pixel-sprites";
 import { fromFt, gridStepFt, showSize, toFt, type Units } from "@/lib/units";
 import { isPermanentPlot } from "@/lib/perennials";
 import { inGroundOn, plannedAfter } from "@/lib/plantings";
-import type { Bed, GardenLayout, Planting, Task } from "@/lib/types";
+import type { Bed, GardenArea, GardenLayout, Planting, Task } from "@/lib/types";
 
 type Geometry = NonNullable<Bed["geometry"]>;
 type Drag = { id: string; mode: "move" | "resize"; startX: number; startY: number; origin: Geometry; current: Geometry };
+/** Dragging a corner of an area's shape (or the garden's edge): `insert` adds a new corner after `index`. */
+type ShapeDrag = {
+  key: string;
+  index: number;
+  /** corner: move one corner; insert: add a corner after `index`; edge: move the side from `index` to the next corner. */
+  kind: "corner" | "insert" | "edge";
+  origin: Array<[number, number]>;
+  current: Array<[number, number]>;
+  moved: boolean;
+  /** Where the pointer started, in feet (for edge drags). */
+  start: [number, number];
+};
+/** Dragging a growing area by its name tag (move, plots and all) or its corner (resize). */
+type AreaDrag = { id: string; mode: "move" | "resize"; startX: number; startY: number; origin: GardenArea; current: GardenArea };
 
 export const CROP_MIME = "application/x-garden-crop";
 
@@ -51,10 +66,18 @@ export function GardenMap(props: {
   onAddBed: () => void;
   onImport: () => void;
   onLayout: (patch: Partial<GardenLayout> & { imageDataUrl?: string | null }) => void;
+  /** Add, move, resize, rename or delete a growing area; `label` describes it for Undo. */
+  onAreaAction: (action: AreaAction, label: string) => void;
+  /** The area picked in Edit layout (Delete removes it), if any. */
+  selectedAreaId: string | null;
+  onSelectArea: (id: string | null) => void;
 }) {
   const { layout, editing } = props;
   const surface = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [areaDrag, setAreaDrag] = useState<AreaDrag | null>(null);
+  const [shapeDrag, setShapeDrag] = useState<ShapeDrag | null>(null);
+  const [renamingArea, setRenamingArea] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
   const [pxPerFt, setPxPerFt] = useState(20);
   // Zoom makes the map wider than its card; the viewport around it scrolls.
@@ -118,6 +141,16 @@ export function GardenMap(props: {
   const spritePx = Math.round(Math.min(44, Math.max(18, basePxPerFt * 2.5)) / 2) * 2;
 
   const beds = placed(props.beds, layout);
+  // Growing areas (none means one garden). While an area is dragged, it and its plots are drawn where it's going.
+  const areas = areasOf(layout);
+  const shownAreas = areas.map((area) =>
+    areaDrag?.id === area.id ? areaDrag.current : shapeDrag?.key === area.id ? reshapeArea(area, shapeDrag.current) : area,
+  );
+  const riding =
+    areaDrag?.mode === "move"
+      ? new Set(bedsInArea(props.beds, areaDrag.origin).map((bed) => bed.id))
+      : new Set<string>();
+  const ride = areaDrag ? { dx: areaDrag.current.x - areaDrag.origin.x, dy: areaDrag.current.y - areaDrag.origin.y } : { dx: 0, dy: 0 };
   // Plots holding only perennials stay put year to year and look mulched.
   const permanentIds = new Set(
     props.beds
@@ -146,7 +179,100 @@ export function GardenMap(props: {
     setDrag({ id: bed.id, mode, startX: event.clientX, startY: event.clientY, origin: bed.geometry, current: bed.geometry });
   }
 
+  function startAreaDrag(event: ReactPointerEvent, area: GardenArea, mode: AreaDrag["mode"]) {
+    if (!editing || props.busy) return;
+    event.preventDefault();
+    event.stopPropagation();
+    (event.target as Element).setPointerCapture?.(event.pointerId);
+    setAreaDrag({ id: area.id, mode, startX: event.clientX, startY: event.clientY, origin: area, current: area });
+  }
+
+  /** Start dragging a corner (or, with `insert`, a new corner from an edge's midpoint) of a shape. */
+  /** The pointer's position in feet on the map. */
+  function pointerFeet(event: { clientX: number; clientY: number }): [number, number] | null {
+    const rect = surface.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return [((event.clientX - rect.left) / rect.width) * layout.widthFt, ((event.clientY - rect.top) / rect.height) * layout.lengthFt];
+  }
+
+  function startShapeDrag(event: ReactPointerEvent, key: string, points: Array<[number, number]>, index: number, kind: ShapeDrag["kind"]) {
+    if (!editing || props.busy) return;
+    event.preventDefault();
+    event.stopPropagation();
+    (event.target as Element).setPointerCapture?.(event.pointerId);
+    if (key !== "garden") props.onSelectArea(key);
+    setShapeDrag({ key, index, kind, origin: points, current: points, moved: false, start: pointerFeet(event) ?? [0, 0] });
+  }
+
+  /** Save a shape: an area's new outline, or the garden's edge. */
+  function commitShape(key: string, points: Array<[number, number]>, removed = false) {
+    const area = areas.find((item) => item.id === key);
+    if (area) props.onAreaAction({ action: "reshape", id: area.id, outline: points }, `${removed ? "remove a corner from" : "reshape"} ${area.name}`);
+    else props.onLayout({ outline: points });
+  }
+
+  /** The shape's points with the dragged corner at (x, y) feet. */
+  function withCorner(d: ShapeDrag, x: number, y: number): Array<[number, number]> {
+    const points = d.origin.map((p) => [...p] as [number, number]);
+    if (d.kind === "insert") points.splice(d.index + 1, 0, [x, y]);
+    else points[d.index] = [x, y];
+    return points;
+  }
+
+  /**
+   * The shape with one side pushed in or out: both its corners move together, straight across the side (so a
+   * square's top edge dragged up makes a taller rectangle). Kept on the map.
+   */
+  function withEdge(d: ShapeDrag, at: [number, number], maxW: number, maxL: number): Array<[number, number]> {
+    const points = d.origin.map((p) => [...p] as [number, number]);
+    const i = d.index;
+    const j = (i + 1) % points.length;
+    const [ax, ay] = points[i];
+    const [bx, by] = points[j];
+    const len = Math.hypot(bx - ax, by - ay) || 1;
+    const nx = -(by - ay) / len;
+    const ny = (bx - ax) / len;
+    const snap = (n: number) => Math.round(n * 2) / 2;
+    let dist = snap((at[0] - d.start[0]) * nx + (at[1] - d.start[1]) * ny);
+    // Don't push either corner off the map.
+    const fits = (k: number) =>
+      [points[i], points[j]].every(([x, y]) => x + nx * k >= 0 && x + nx * k <= maxW && y + ny * k >= 0 && y + ny * k <= maxL);
+    while (dist !== 0 && !fits(dist)) dist = dist > 0 ? Math.max(0, dist - 0.5) : Math.min(0, dist + 0.5);
+    const round = (n: number) => Math.round(n * 10) / 10;
+    points[i] = [round(ax + nx * dist), round(ay + ny * dist)];
+    points[j] = [round(bx + nx * dist), round(by + ny * dist)];
+    return points;
+  }
+
   function onPointerMove(event: ReactPointerEvent) {
+    if (shapeDrag) {
+      const rect = surface.current?.getBoundingClientRect();
+      if (!rect) return;
+      const area = areas.find((item) => item.id === shapeDrag.key);
+      // Areas can grow past the map's right and bottom edges (the map grows to fit); the garden's own edge can't.
+      const maxW = area ? AREA_MAX_FT : layout.widthFt;
+      const maxL = area ? AREA_MAX_FT : layout.lengthFt;
+      const snap = (n: number) => Math.round(n * 2) / 2;
+      const x = Math.min(Math.max(snap(((event.clientX - rect.left) / rect.width) * layout.widthFt), 0), maxW);
+      const y = Math.min(Math.max(snap(((event.clientY - rect.top) / rect.height) * layout.lengthFt), 0), maxL);
+      const at = pointerFeet(event) ?? [x, y];
+      const points = shapeDrag.kind === "edge" ? withEdge(shapeDrag, at, maxW, maxL) : withCorner(shapeDrag, x, y);
+      // Keep the last shape that worked: no crossing itself, no running into another area.
+      const ok = area ? areaFits(reshapeArea(area, points), areas, AREA_MAX_FT, AREA_MAX_FT) : !selfCrossing(points);
+      if (ok) setShapeDrag({ ...shapeDrag, current: points, moved: true });
+      return;
+    }
+    if (areaDrag) {
+      const { fx, fy } = feetPerPixel();
+      const snap = (n: number) => Math.round(n * 2) / 2;
+      const dx = snap((event.clientX - areaDrag.startX) * fx);
+      const dy = snap((event.clientY - areaDrag.startY) * fy);
+      const o = areaDrag.origin;
+      const next = areaDrag.mode === "move" ? shiftArea(o, dx, dy) : resizeArea(o, Math.max(3, snap(o.w + dx)), Math.max(3, snap(o.h + dy)));
+      // Areas can't overlap; past the map's right or bottom edge the map grows. Otherwise it stays where it last fit.
+      if (areaFits(next, areas, AREA_MAX_FT, AREA_MAX_FT)) setAreaDrag({ ...areaDrag, current: next });
+      return;
+    }
     if (!drag) return;
     const { fx, fy } = feetPerPixel();
     const dx = (event.clientX - drag.startX) * fx;
@@ -176,6 +302,24 @@ export function GardenMap(props: {
   }
 
   function endDrag() {
+    if (shapeDrag) {
+      const d = shapeDrag;
+      setShapeDrag(null);
+      if (d.moved && JSON.stringify(d.current) !== JSON.stringify(d.origin)) commitShape(d.key, d.current);
+      return;
+    }
+    if (areaDrag) {
+      const { origin: o, current: c, mode } = areaDrag;
+      setAreaDrag(null);
+      // A click on an area's soil or name tag without moving it picks the area (Delete removes it).
+      if (c.x === o.x && c.y === o.y && c.w === o.w && c.h === o.h) props.onSelectArea(o.id);
+      if (mode === "move" && (c.x !== o.x || c.y !== o.y)) {
+        props.onAreaAction({ action: "move", id: o.id, dx: Math.round((c.x - o.x) * 10) / 10, dy: Math.round((c.y - o.y) * 10) / 10 }, `move ${o.name}`);
+      } else if (mode === "resize" && (c.w !== o.w || c.h !== o.h)) {
+        props.onAreaAction({ action: "resize", id: o.id, w: c.w, h: c.h }, `resize ${o.name}`);
+      }
+      return;
+    }
     if (!drag) return;
     const bed = props.beds.find((item) => item.id === drag.id);
     const moved = JSON.stringify(drag.current) !== JSON.stringify(drag.origin);
@@ -192,7 +336,8 @@ export function GardenMap(props: {
     backgroundImage: `linear-gradient(to right, rgba(255, 236, 200, 0.07) 1px, transparent 1px), linear-gradient(to bottom, rgba(255, 236, 200, 0.07) 1px, transparent 1px), ${TILES.soil}`,
     backgroundSize: `${gridX}% ${gridY}%, ${gridX}% ${gridY}%, 24px 24px`,
   };
-  const shape = layout.outline && layout.outline.length >= 3 ? layout.outline : null;
+  const gardenOutline = shapeDrag?.key === "garden" ? shapeDrag.current : layout.outline;
+  const shape = gardenOutline && gardenOutline.length >= 3 ? gardenOutline : null;
   const shapePct = shape?.map(([x, y]) => [(x / layout.widthFt) * 100, (y / layout.lengthFt) * 100]) ?? null;
   // A grass border around the garden, so its soil fills about 80% of the map section.
   const margin = Math.max(2, 0.1 * Math.max(layout.widthFt, layout.lengthFt));
@@ -213,8 +358,70 @@ export function GardenMap(props: {
     top: `${(margin / frameH) * 100}%`,
     width: `${(layout.widthFt / frameW) * 100}%`,
     height: `${(layout.lengthFt / frameH) * 100}%`,
-    ...(shapePct ? {} : ground),
+    // An odd shape or separate areas draw their own soil; the rest is grass.
+    ...(shapePct || areas.length ? {} : ground),
   };
+
+  /**
+   * Handles for reshaping in Edit layout: a square on each corner (drag to move it, double-click to remove it) and a
+   * small dot in the middle of each edge (drag to add a corner there).
+   */
+  // A plain function (not a component), so the handle being dragged isn't remounted on every move.
+  function shapeHandles(name: string, shapeKey: string, points: Array<[number, number]>) {
+    const at = ([x, y]: [number, number]): CSSProperties => ({ left: `${(x / layout.widthFt) * 100}%`, top: `${(y / layout.lengthFt) * 100}%` });
+    return (
+      <>
+        {/* Each side is a grab strip: drag it to push that side in or out. */}
+        <svg className="shape-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          {points.map((point, i) => {
+            const next = points[(i + 1) % points.length];
+            const flat = Math.abs(next[1] - point[1]) < 0.01;
+            const upright = Math.abs(next[0] - point[0]) < 0.01;
+            return (
+              <line
+                key={`e${i}`}
+                x1={(point[0] / layout.widthFt) * 100}
+                y1={(point[1] / layout.lengthFt) * 100}
+                x2={(next[0] / layout.widthFt) * 100}
+                y2={(next[1] / layout.lengthFt) * 100}
+                style={{ cursor: flat ? "ns-resize" : upright ? "ew-resize" : "move" }}
+                onPointerDown={(event) => startShapeDrag(event, shapeKey, points, i, "edge")}
+              >
+                <title>{`Drag to move this side of ${name}`}</title>
+              </line>
+            );
+          })}
+        </svg>
+        {points.map((point, i) => {
+          const next = points[(i + 1) % points.length];
+          return (
+            <span
+              key={`m${i}`}
+              className="shape-mid"
+              aria-hidden="true"
+              title={`Drag to add a corner to ${name}`}
+              style={at([(point[0] + next[0]) / 2, (point[1] + next[1]) / 2])}
+              onPointerDown={(event) => startShapeDrag(event, shapeKey, points, i, "insert")}
+            />
+          );
+        })}
+        {points.map((point, i) => (
+          <span
+            key={`c${i}`}
+            className="shape-corner"
+            aria-hidden="true"
+            title={`Drag to reshape ${name}${points.length > 3 ? ". Double-click to remove this corner." : ""}`}
+            style={at(point)}
+            onPointerDown={(event) => startShapeDrag(event, shapeKey, points, i, "corner")}
+            onDoubleClick={(event) => {
+              event.stopPropagation();
+              if (points.length > 3) commitShape(shapeKey, points.filter((_, k) => k !== i), true);
+            }}
+          />
+        ))}
+      </>
+    );
+  }
 
   return (
     <section className="map-card" aria-label="Garden map">
@@ -292,7 +499,7 @@ export function GardenMap(props: {
       >
       <div
         ref={surface}
-        className={`map-surface${editing ? " editing" : ""}${shapePct ? " shaped" : ""}`}
+        className={`map-surface${editing ? " editing" : ""}${shapePct || areas.length ? " shaped" : ""}`}
         style={surfaceStyle}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -301,7 +508,92 @@ export function GardenMap(props: {
           if (event.target === event.currentTarget) props.onSelect(null);
         }}
       >
-        {shapePct ? (
+        {areas.length ? (
+          <>
+            {shownAreas.map((area) => {
+              const pct = areaPolygon(area).map(([x, y]) => [(x / layout.widthFt) * 100, (y / layout.lengthFt) * 100]);
+              return (
+                <div
+                  key={area.id}
+                  className={`lawn${editing ? " movable" : ""}`}
+                  aria-hidden="true"
+                  title={editing ? `Drag to move ${area.name} and its plots` : undefined}
+                  style={{ ...ground, clipPath: `polygon(${pct.map(([x, y]) => `${x}% ${y}%`).join(", ")})` }}
+                  onPointerDown={(event) => startAreaDrag(event, areas.find((item) => item.id === area.id) ?? area, "move")}
+                />
+              );
+            })}
+            <svg className="lawn-edge" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              {shownAreas.map((area) => (
+                <polygon
+                  key={area.id}
+                  className={editing && props.selectedAreaId === area.id ? "selected" : undefined}
+                  points={areaPolygon(area)
+                    .map(([x, y]) => `${(x / layout.widthFt) * 100},${(y / layout.lengthFt) * 100}`)
+                    .join(" ")}
+                />
+              ))}
+            </svg>
+            {shownAreas.map((area) => (
+              <div
+                key={area.id}
+                className={`area-tag${editing ? " editing" : ""}${editing && props.selectedAreaId === area.id ? " selected" : ""}`}
+                style={{ left: `${(area.x / layout.widthFt) * 100}%`, top: `${(area.y / layout.lengthFt) * 100}%` }}
+                onPointerDown={(event) => {
+                  if ((event.target as HTMLElement).closest("button, input")) return;
+                  startAreaDrag(event, area, "move");
+                }}
+                onDoubleClick={() => editing && setRenamingArea(area.id)}
+                title={editing ? "Drag to move this area and its plots. Double-click to rename." : area.name}
+              >
+                {renamingArea === area.id ? (
+                  <input
+                    className="area-name-input"
+                    defaultValue={area.name}
+                    aria-label="Area name"
+                    autoFocus
+                    onFocus={(event) => event.target.select()}
+                    onBlur={(event) => {
+                      const name = event.target.value.trim();
+                      setRenamingArea(null);
+                      if (event.target.dataset.cancel !== "1" && name && name !== area.name) {
+                        props.onAreaAction({ action: "rename", id: area.id, name }, `rename ${area.name}`);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      const input = event.target as HTMLInputElement;
+                      if (event.key === "Enter") input.blur();
+                      if (event.key === "Escape") {
+                        event.stopPropagation();
+                        input.dataset.cancel = "1";
+                        input.blur();
+                      }
+                    }}
+                  />
+                ) : (
+                  <span>{area.name}</span>
+                )}
+                {editing ? (
+                  <button
+                    type="button"
+                    className="area-delete"
+                    aria-label={`Delete ${area.name}`}
+                    title={`Delete ${area.name} (only when it has no plots)`}
+                    disabled={props.busy}
+                    onClick={() => {
+                      if (window.confirm(`Delete ${area.name}? Its plots must be moved or deleted first.`)) {
+                        props.onAreaAction({ action: "delete", id: area.id }, `delete ${area.name}`);
+                      }
+                    }}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+            ))}
+            {editing ? shownAreas.map((area) => <Fragment key={area.id}>{shapeHandles(area.name, area.id, areaPolygon(area))}</Fragment>) : null}
+          </>
+        ) : shapePct ? (
           <>
             <div
               className="lawn"
@@ -313,12 +605,24 @@ export function GardenMap(props: {
             </svg>
           </>
         ) : null}
+        {editing && !areas.length ? (
+          shapeHandles(
+            "the garden",
+            "garden",
+            shape ?? [
+              [0, 0],
+              [layout.widthFt, 0],
+              [layout.widthFt, layout.lengthFt],
+              [0, layout.lengthFt],
+            ],
+          )
+        ) : null}
         <div className="scale" aria-hidden="true">
           <span className="scale-bar" style={{ width: `${gridX}%` }} />
           <span>{units === "m" ? "1 m" : "5 ft"}</span>
         </div>
         {beds.map((bed) => {
-          const g = drag?.id === bed.id ? drag.current : bed.geometry;
+          const g = drag?.id === bed.id ? drag.current : riding.has(bed.id) ? { ...bed.geometry, x: bed.geometry.x + ride.dx, y: bed.geometry.y + ride.dy } : bed.geometry;
           const current = props.plantings.filter((p) => p.bed_id === bed.id && inGroundOn(p, props.day, props.today));
           const planned = props.plantings
             .filter((p) => p.bed_id === bed.id && plannedAfter(p, props.day, props.today))
@@ -332,8 +636,6 @@ export function GardenMap(props: {
             : nextPlanned.length
               ? `${shownCrops.join(" + ")} planned`
               : "open";
-          // Beds drawn from a plan are often named after their crops; don't say it twice.
-          const sayCrops = !shownCrops.length || !shownCrops.every((c) => bed.name.toLowerCase().includes(c.slice(0, 4)));
           const bedPxH = g.h * pxPerFt;
           const compact = bedPxH < 48;
           // Lay the drawings out at normal size, then scale by the zoom.
@@ -350,7 +652,6 @@ export function GardenMap(props: {
           const urgent = tasks.find((task) => task.severity === "urgent");
           const upcoming = tasks.find((task) => task.severity === "upcoming");
           const state = crop ? "growing" : planned.length ? "planned" : "open";
-          const tall = !compact && (g.h / layout.lengthFt > 0.12 || g.w / layout.widthFt > 0.3);
           return (
             <div
               key={bed.id}
@@ -421,9 +722,9 @@ export function GardenMap(props: {
                   })}
                 </span>
               ) : null}
+              {/* Same size tag on every plot: just the name. The crops show in the tooltip and the plant list. */}
               <span className="bed-label">
                 <strong>{bed.name}</strong>
-                {tall && sayCrops ? <em>{cropText}</em> : null}
               </span>
               <span className="bed-flags">
                 {urgent ? (
@@ -507,6 +808,15 @@ export function GardenMap(props: {
             </label>
             <button type="button" className="pill" onClick={props.onAddBed} disabled={props.busy}>
               + Add bed
+            </button>
+            <button
+              type="button"
+              className="pill"
+              onClick={() => props.onAreaAction({ action: "add" }, "add an area")}
+              disabled={props.busy}
+              title="Add a separate growing area to the map (another garden, say). The garden you have becomes Area 1."
+            >
+              + Add area
             </button>
           </div>
         ) : (

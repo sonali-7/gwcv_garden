@@ -22,7 +22,9 @@
       "broccoli",
       "collards",
       "radish",
-      "radishes"
+      "radishes",
+      "turnip",
+      "turnips"
     ],
     "nitrogenFixer": false,
     "feeder": "heavy"
@@ -191,5 +193,13 @@
     ],
     "nitrogenFixer": false,
     "feeder": "light"
+  },
+  {
+    "family": "mallow",
+    "crops": [
+      "okra"
+    ],
+    "nitrogenFixer": false,
+    "feeder": "medium"
   }
 ]

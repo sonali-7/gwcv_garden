@@ -48,6 +48,11 @@ const MATURITY_DAYS: Record<string, number> = {
   mint: 90,
   basil: 60,
   leeks: 120,
+  okra: 60,
+  turnip: 50,
+  zinnia: 60,
+  sunflower: 80,
+  collards: 60,
   // Perennials: roughly the time to their first harvest. Their yearly seasons are in perennials.ts.
   raspberry: 365,
   blackberry: 365,
@@ -125,6 +130,16 @@ const CANONICAL: Record<string, string> = {
   basil: "basil",
   leek: "leeks",
   leeks: "leeks",
+  okra: "okra",
+  turnip: "turnip",
+  turnips: "turnip",
+  zinnia: "zinnia",
+  zinnias: "zinnia",
+  sunflower: "sunflower",
+  sunflowers: "sunflower",
+  collard: "collards",
+  collards: "collards",
+  "collard greens": "collards",
   raspberry: "raspberry",
   raspberries: "raspberry",
   blackberry: "blackberry",
@@ -168,4 +183,22 @@ export function familyOf(crop: string): CropFamily | null {
       family.crops.some((name) => canonicalCrop(name) === key || name === crop.toLowerCase()),
     ) ?? null
   );
+}
+
+/**
+ * Teach the app a crop it didn't have built in (from a Gemini profile): its names, days to maturity, and family.
+ * Adding to an existing family (by name) keeps rotation working; a new family is added with its feeder type.
+ */
+export function addCrop(crop: string, aliases: string[], days: number, family: Omit<CropFamily, "crops">): void {
+  for (const name of [crop, ...aliases]) {
+    const key = name.toLowerCase().trim();
+    if (key && !CANONICAL[key]) CANONICAL[key] = crop;
+  }
+  if (!MATURITY_DAYS[crop]) MATURITY_DAYS[crop] = days;
+  const existing = CROP_FAMILIES.find((item) => item.family === family.family);
+  if (existing) {
+    if (!existing.crops.includes(crop)) existing.crops.push(crop);
+  } else {
+    CROP_FAMILIES.push({ ...family, crops: [crop] });
+  }
 }

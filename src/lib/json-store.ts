@@ -12,6 +12,7 @@ const WRITES = new Set<keyof Store>([
   "updateBed",
   "deleteBed",
   "saveLayout",
+  "saveCropProfile",
   "insertPlanting",
   "updatePlanting",
   "deletePlanting",

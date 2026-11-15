@@ -1,5 +1,5 @@
 import { clone, rememberedConversation, type Store } from "./store";
-import { defaultLayout, emptyDatabase, type Bed, type GardenLayout, type Conversation, type DatabaseShape, type Person, type Photo, type Planting, type Task, type ThreadMessage, type WorkSession } from "./types";
+import { defaultLayout, emptyDatabase, type Bed, type CropProfile, type GardenLayout, type Conversation, type DatabaseShape, type Person, type Photo, type Planting, type Task, type ThreadMessage, type WorkSession } from "./types";
 
 export function createMemoryStore(initial?: DatabaseShape): Store {
   let db = clone(initial ?? emptyDatabase());
@@ -40,6 +40,12 @@ export function createMemoryStore(initial?: DatabaseShape): Store {
     },
     async saveLayout(layout: GardenLayout) {
       db.layout = clone(layout);
+    },
+    async listCropProfiles() {
+      return clone(db.cropProfiles ?? []);
+    },
+    async saveCropProfile(profile: CropProfile) {
+      db.cropProfiles = [...(db.cropProfiles ?? []).filter((item) => item.crop !== profile.crop), clone(profile)];
     },
     async listPlantings() {
       return clone(db.plantings);
