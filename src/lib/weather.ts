@@ -88,6 +88,28 @@ async function getJson(url: string): Promise<unknown> {
 const cache = (globalThis as { __gwcvRain?: Map<string, { at: number; rain: Rain | null }> }).__gwcvRain ?? new Map();
 (globalThis as { __gwcvRain?: typeof cache }).__gwcvRain = cache;
 
+type GeoHit = { at: number; place: Place | null };
+const geoCache = (globalThis as { __gwcvGeo?: Map<string, GeoHit> }).__gwcvGeo ?? new Map();
+(globalThis as { __gwcvGeo?: typeof geoCache }).__gwcvGeo = geoCache;
+
+async function geocode(location: string): Promise<Place | null> {
+  const key = location.trim().toLowerCase();
+  const hit = geoCache.get(key);
+  // Keep coordinates for a day — towns don't move; avoids a second HTTP hop on rain refresh.
+  if (hit && Date.now() - hit.at < 24 * KEEP_MS) return hit.place;
+  const { town, hints } = parseLocation(location);
+  if (!town) {
+    geoCache.set(key, { at: Date.now(), place: null });
+    return null;
+  }
+  const found = (await getJson(
+    `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(town)}&count=10&language=en&format=json`,
+  )) as { results?: Place[] };
+  const place = pickPlace(found.results ?? [], hints);
+  geoCache.set(key, { at: Date.now(), place });
+  return place;
+}
+
 /** Rain near the garden's town, cached for an hour (ten minutes after a failure). Null if unknown. */
 export async function rainNear(location: string): Promise<Rain | null> {
   const key = location.trim().toLowerCase();
@@ -96,11 +118,7 @@ export async function rainNear(location: string): Promise<Rain | null> {
   if (hit && Date.now() - hit.at < (hit.rain ? KEEP_MS : KEEP_FAILED_MS)) return hit.rain;
   let rain: Rain | null = null;
   try {
-    const { town, hints } = parseLocation(location);
-    const found = (await getJson(
-      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(town)}&count=10&language=en&format=json`,
-    )) as { results?: Place[] };
-    const place = pickPlace(found.results ?? [], hints);
+    const place = await geocode(location);
     if (place) {
       const forecast = await getJson(
         `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}` +

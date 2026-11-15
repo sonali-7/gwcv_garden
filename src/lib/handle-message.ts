@@ -1019,8 +1019,8 @@ function dayFromEditInstruction(
 
 async function scheduleText(store: Store, now: Date, timeZone: string): Promise<string> {
   const week = startOfWeekYmd(now, timeZone);
-  const people = await store.listPeople();
-  const sessions = (await store.listSessions())
+  const [people, allSessions] = await Promise.all([store.listPeople(), store.listSessions()]);
+  const sessions = allSessions
     .filter((session) => sessionTouchesWeek(session, week, timeZone))
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
   if (sessions.length === 0) return "Nothing logged this week yet.";
@@ -1035,15 +1035,13 @@ async function scheduleText(store: Store, now: Date, timeZone: string): Promise<
 }
 
 async function wateringText(store: Store, now: Date, timeZone: string): Promise<string> {
-  const tasks = buildTasks({
-    now,
-    beds: await store.listBeds(),
-    plantings: await store.listPlantings(),
-    sessions: await store.listSessions(),
-    timeZone,
-    rain: await gardenRain(store),
-  });
-  const water = tasks.filter((task) => task.type === "water");
+  const [beds, plantings, sessions, rain] = await Promise.all([
+    store.listBeds(),
+    store.listPlantings(),
+    store.listSessions(),
+    gardenRain(store),
+  ]);
+  const water = buildTasks({ now, beds, plantings, sessions, timeZone, rain }).filter((task) => task.type === "water");
   if (water.length === 0) return "Nothing needs watering right now.";
   return water.map((task) => `${task.title}. ${task.detail}`).join(" ");
 }

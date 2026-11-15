@@ -1,4 +1,4 @@
-import { reconcilePriorityTasks } from "./planner";
+import { reconcileGardenState } from "./planner";
 import { toPublicPerson, type DashboardData } from "./types";
 import { gardenTz, startOfWeekYmd, todayYmd } from "./time";
 import type { Store } from "./store";
@@ -7,31 +7,32 @@ export async function loadDashboard(store: Store, weekStart: string | null, now 
   const timeZone = gardenTz();
   const today = todayYmd(now, timeZone);
   const week = weekStart && /^\d{4}-\d{2}-\d{2}$/.test(weekStart) ? weekStart : startOfWeekYmd(now, timeZone);
-  // On calendar open (and week reload): rebuild from the garden, drop stale DB task rows.
-  const tasks = await reconcilePriorityTasks(store, now);
-  const [people, beds, plantings, sessions, photos] = await Promise.all([
+  // One reconcile pass for tasks + garden rows; other dashboard bits load beside it.
+  const [garden, people, photos, allThreads, demoPhones] = await Promise.all([
+    reconcileGardenState(store, now),
     store.listPeople(),
-    store.listBeds(),
-    store.listPlantings(),
-    store.listSessions(),
     store.listPhotos(),
+    store.listThreads(),
+    store.listDemoPhones(),
   ]);
 
   const threads: DashboardData["threads"] = {};
   for (const person of people) {
-    threads[person.id] = await store.getThread(person.phone);
+    threads[person.id] = allThreads[person.phone] ?? [];
   }
 
-  const demoPhones = await store.listDemoPhones();
   let newThread: DashboardData["newSender"]["thread"] = [];
   let available = true;
-  for (const phone of demoPhones) {
-    const person = people.find((item) => item.phone === phone);
-    const conversation = await store.getConversation(phone);
-    if (!person || conversation.pending?.kind === "name") {
-      newThread = await store.getThread(phone);
-      available = true;
-      break;
+  if (demoPhones.length) {
+    const conversations = await Promise.all(demoPhones.map((phone) => store.getConversation(phone)));
+    for (let i = 0; i < demoPhones.length; i += 1) {
+      const phone = demoPhones[i];
+      const person = people.find((item) => item.phone === phone);
+      if (!person || conversations[i].pending?.kind === "name") {
+        newThread = allThreads[phone] ?? [];
+        available = true;
+        break;
+      }
     }
   }
 
@@ -40,10 +41,10 @@ export async function loadDashboard(store: Store, weekStart: string | null, now 
     today,
     timezone: timeZone,
     people: people.map(toPublicPerson),
-    beds,
-    plantings,
-    sessions,
-    tasks,
+    beds: garden.beds,
+    plantings: garden.plantings,
+    sessions: garden.sessions,
+    tasks: garden.tasks,
     photos,
     threads,
     newSender: { available, thread: newThread },

@@ -89,6 +89,9 @@ export function createMemoryStore(initial?: DatabaseShape): Store {
     async getThread(phone) {
       return clone(db.threads[phone] ?? []);
     },
+    async listThreads() {
+      return clone(db.threads);
+    },
     async appendThread(phone, message: ThreadMessage) {
       const list = db.threads[phone] ?? [];
       list.push(clone(message));

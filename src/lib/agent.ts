@@ -46,6 +46,14 @@ export async function interpretMessage(text: string, context?: GardenContext): P
   if (!process.env.GEMINI_API_KEY) {
     return withMemoryOnParsed(rules, text, context?.memory ?? null, wantsReusePrior(text));
   }
+  // Clear rule parses skip Gemini (was adding 4–12s on every ordinary log).
+  if (
+    rules.kind === "session" &&
+    rules.draft.activity &&
+    (rules.draft.start || rules.draft.durationMin != null)
+  ) {
+    return withMemoryOnParsed(rules, text, context?.memory ?? null, wantsReusePrior(text));
+  }
   try {
     const model = await classifyWithGemini(text, context);
     if (!model || model.kind === "unknown") {
@@ -389,7 +397,8 @@ async function classifyWithGemini(text: string, context: GardenContext | undefin
       responseMimeType: "application/json",
       responseSchema: { type: "OBJECT", properties, required: ["kind"] },
     },
-    8_000,
+    5_000,
+    2_500,
   );
   if (!raw?.trim()) return null;
   return messageFromTool(text, JSON.parse(raw));
