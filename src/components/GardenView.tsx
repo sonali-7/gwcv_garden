@@ -181,6 +181,17 @@ export function GardenView({ initial }: { initial: GardenData }) {
     });
   }
 
+  /** Confirm a plan was planted today: from now on it counts as in the ground, with its harvest date moved to match. */
+  function confirmPlanted(plantingId: string) {
+    const planting = data.plantings.find((p) => p.id === plantingId);
+    const bed = planting ? data.beds.find((item) => item.id === planting.bed_id) : null;
+    if (!planting) return;
+    run(async () => {
+      await send(`/api/plantings/${plantingId}`, "PATCH", { planted: true });
+      setNotice(`Marked the ${planting.crop} in ${bed?.name ?? "the bed"} planted today.`);
+    });
+  }
+
   /** Take crops out: plans that haven't started are deleted; anything planted is marked pulled on the date shown. */
   function removeCrops(plantingIds: string[]) {
     if (mode === "past") return;
@@ -335,6 +346,8 @@ export function GardenView({ initial }: { initial: GardenData }) {
           }
           onDeleteBed={deleteBed}
           onRemove={removeCrops}
+          onConfirm={confirmPlanted}
+          realToday={data.today}
         />
       </div>
       {removing ? (

@@ -1911,12 +1911,14 @@ h1 {
 }
 
 /* ---------- Plant list ---------- */
+/* As tall as the garden card beside it (the height: 0 + min-height: 100% pair stops the list's own
+   content from stretching the row); longer content scrolls inside. */
 .plant-list {
   padding: 16px 16px 18px;
-  max-height: calc(100vh - 120px);
+  align-self: stretch;
+  height: 0;
+  min-height: calc(100% - 6px); /* minus its 3px margin top and bottom */
   overflow: auto;
-  position: sticky;
-  top: 16px;
 }
 
 .plant-list h2 {
@@ -2311,6 +2313,8 @@ h1 {
   .plant-list {
     position: static;
     max-height: none;
+    height: auto;
+    min-height: 0;
   }
 
   .view-tabs {
@@ -2697,3 +2701,8 @@ h1 {
   font-size: 12px;
   color: #8a5a1c;
 }
+
+/* ---------- Plans waiting to be confirmed ---------- */
+.plan-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; }
+.pill.small { padding: 3px 10px; font-size: 12.5px; }
+.growing.overdue small em { font-style: normal; color: #b0631a; font-weight: 600; }
