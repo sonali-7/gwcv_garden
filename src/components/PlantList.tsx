@@ -70,6 +70,8 @@ export function PlantList(props: {
   onConfirm: (plantingId: string) => void;
   /** The real date, so overdue plans can be spotted while the timeline looks ahead. */
   realToday: string;
+  /** Gemini added a plant profile: refresh so everything uses it. */
+  onLearnedPlant: () => void;
 }) {
   const { selected } = props;
   return (
@@ -450,6 +452,8 @@ function BedDetail(props: Parameters<typeof PlantList>[0] & { bed: Bed }) {
           sprites={data.sprites}
           busy={props.busy}
           onPlan={props.onPlan}
+          profiles={data.cropProfiles}
+          onLearned={props.onLearnedPlant}
         />
       )}
 

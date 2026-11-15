@@ -114,3 +114,8 @@ export function establishedDate(crop: string, today: string): string {
   if (!info || !info.yearsToFirstHarvest) return today;
   return ymd(Number(today.slice(0, 4)) - info.yearsToFirstHarvest, 1);
 }
+
+/** Add a perennial the app didn't know (from a Gemini profile). */
+export function addPerennial(crop: string, info: PerennialInfo): void {
+  if (!PERENNIALS[crop]) PERENNIALS[crop] = info;
+}

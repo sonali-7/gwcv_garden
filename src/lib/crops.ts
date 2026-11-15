@@ -184,3 +184,21 @@ export function familyOf(crop: string): CropFamily | null {
     ) ?? null
   );
 }
+
+/**
+ * Teach the app a crop it didn't have built in (from a Gemini profile): its names, days to maturity, and family.
+ * Adding to an existing family (by name) keeps rotation working; a new family is added with its feeder type.
+ */
+export function addCrop(crop: string, aliases: string[], days: number, family: Omit<CropFamily, "crops">): void {
+  for (const name of [crop, ...aliases]) {
+    const key = name.toLowerCase().trim();
+    if (key && !CANONICAL[key]) CANONICAL[key] = crop;
+  }
+  if (!MATURITY_DAYS[crop]) MATURITY_DAYS[crop] = days;
+  const existing = CROP_FAMILIES.find((item) => item.family === family.family);
+  if (existing) {
+    if (!existing.crops.includes(crop)) existing.crops.push(crop);
+  } else {
+    CROP_FAMILIES.push({ ...family, crops: [crop] });
+  }
+}

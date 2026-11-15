@@ -13,6 +13,7 @@ import { canDelete, clearing, cropsInPatch, dropSituation, isEstablished, replac
 import { adviseBed, guideFor, type Recommendation } from "@/lib/recommend";
 import type { Bed, GardenLayout } from "@/lib/types";
 import { UNDO_LIMIT, undoStep, type UndoStep } from "@/lib/undo";
+import { registerCropProfiles } from "@/lib/crop-profiles";
 
 async function send<T>(url: string, method: string, body?: unknown): Promise<T | null> {
   const response = await fetch(url, {
@@ -146,11 +147,16 @@ export function GardenView({ initial }: { initial: GardenData }) {
     }
   }
 
+  // Plants looked up with Gemini join the crop tables before anything is worked out from them.
+  registerCropProfiles(data.cropProfiles);
+
   const advice = useMemo(() => {
     const map = new Map<string, ReturnType<typeof adviseBed>>();
     for (const bed of data.beds) map.set(bed.id, adviseBed(bed, data.plantings, day, data.today));
     return map;
-  }, [data.beds, data.plantings, day, data.today]);
+    // The profiles change what's known about crops, so advice is redone when they do.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.beds, data.plantings, day, data.today, data.cropProfiles]);
 
   // What the plant list sees: the garden as of `day`. Priority tasks are about right now, so they only show today.
   const shown = useMemo<GardenData>(() => {
@@ -403,6 +409,7 @@ export function GardenView({ initial }: { initial: GardenData }) {
           onDeleteBed={deleteBed}
           onRemove={removeCrops}
           onConfirm={confirmPlanted}
+          onLearnedPlant={() => void reload()}
           realToday={data.today}
         />
       </div>

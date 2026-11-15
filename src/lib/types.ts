@@ -204,6 +204,34 @@ export type DatabaseShape = {
   demoPhones: string[];
   seenEvents: string[];
   layout?: GardenLayout;
+  /** Plants the app didn't know, looked up with Gemini (see crop-profiles.ts). */
+  cropProfiles?: CropProfile[];
+};
+
+/**
+ * What the app knows about a plant it didn't have built in, looked up with Gemini when someone searches for it.
+ * It feeds the same rules as the built-in crops: rotation (family), nitrogen (feeder / fixer), harvest timing,
+ * sowing months and, for perennials, the yearly harvest season.
+ */
+export type CropProfile = {
+  /** Lowercase common name, as the app uses it. */
+  crop: string;
+  /** Other names people might type (plurals, regional names). */
+  aliases: string[];
+  family: string;
+  nitrogenFixer: boolean;
+  feeder: "heavy" | "medium" | "light";
+  daysToMaturity: number;
+  /** Months it can be sown or planted out (1–12, northern hemisphere). */
+  sowMonths: number[];
+  water: "low" | "medium" | "high";
+  sun: string;
+  soil: string;
+  perennial: { harvestMonths: number[]; yearsToFirstHarvest: number } | null;
+  /** One plain sentence about growing it. */
+  note: string;
+  source: "gemini";
+  created_at: string;
 };
 
 export type DashboardData = {

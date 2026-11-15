@@ -1,13 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CROP_MIME } from "@/components/GardenMap";
 import { canonicalCrop } from "@/lib/crops";
 import { monthsLabel } from "@/lib/perennials";
 import { spriteUrl } from "@/lib/pixel-sprites";
 import { searchPlants, type SearchHit } from "@/lib/plant-search";
 import type { BedAdvice } from "@/lib/recommend";
-import type { Bed } from "@/lib/types";
+import { registerCropProfiles } from "@/lib/crop-profiles";
+import type { Bed, CropProfile } from "@/lib/types";
 
 type How = "after" | "alongside" | "replace";
 
@@ -55,10 +56,51 @@ export function PlantSearch(props: {
   sprites: Record<string, string>;
   busy: boolean;
   onPlan: (bedId: string, crop: string, how?: How) => void;
+  /** Plants already looked up with Gemini, to show what it said about them. */
+  profiles: CropProfile[];
+  /** Gemini added a plant: refresh so the rest of the page uses it. */
+  onLearned: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const hits = useMemo(() => searchPlants(query, props.advice), [query, props.advice]);
+  // Bumped when Gemini teaches the app a plant, so the search runs again and finds it.
+  const [learned, setLearned] = useState(0);
+  const [lookup, setLookup] = useState<{ name: string; state: "busy" | "error"; message?: string } | null>(null);
+  const tried = useRef(new Set<string>());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const hits = useMemo(() => searchPlants(query, props.advice), [query, props.advice, learned]);
   const typed = query.trim().toLowerCase();
+
+  // A plant the app doesn't know: once typing pauses, ask Gemini for a profile (once per name).
+  useEffect(() => {
+    if (hits.length || typed.length < 3 || tried.current.has(typed)) return;
+    const name = typed;
+    const timer = window.setTimeout(async () => {
+      tried.current.add(name);
+      setLookup({ name, state: "busy" });
+      try {
+        const response = await fetch("/api/crops/profile", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { profile?: CropProfile; known?: boolean; crop?: string; error?: string };
+        if (!response.ok) throw new Error(data.error || "Couldn't look that plant up.");
+        if (data.profile) {
+          registerCropProfiles([data.profile]);
+          setLearned((n) => n + 1);
+          props.onLearned();
+          if (data.profile.crop !== name) setQuery(data.profile.crop);
+        } else if (data.known && data.crop) {
+          setQuery(data.crop);
+        }
+        setLookup(null);
+      } catch (err) {
+        setLookup({ name, state: "error", message: err instanceof Error ? err.message : "Couldn't look that plant up." });
+      }
+    }, 900);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typed, hits.length]);
   const { bed, occupant, advice } = props;
 
   function plan(hit: { crop: string; avoid?: SearchHit["avoid"] }, how?: How) {
@@ -115,6 +157,7 @@ export function PlantSearch(props: {
         <ul className="search-hits" aria-label="Matching plants">
           {hits.map((hit) => {
             const { text, warn } = note(hit, props.future, props.thisYear);
+            const profile = props.profiles.find((p) => p.crop === hit.crop);
             return (
               <li
                 key={hit.crop}
@@ -131,8 +174,10 @@ export function PlantSearch(props: {
                   <strong>
                     {title(hit.crop)}
                     {hit.family ? <small> · {hit.family}</small> : null}
+                    {profile ? <span className="from-gemini" title="Profile looked up with Gemini">from Gemini</span> : null}
                   </strong>
                   <p className={warn ? "hit-note warn" : "hit-note"}>{text}</p>
+                  {profile?.note ? <p className="hit-note">{profile.note}</p> : null}
                   <footer>
                     <a href={seedLink(hit.crop, props.location)} target="_blank" rel="noreferrer">
                       Find seeds ↗
@@ -146,8 +191,21 @@ export function PlantSearch(props: {
         </ul>
       ) : typed.length >= 2 ? (
         <div className="search-none">
-          <p className="quiet small">No plant called “{query.trim()}” in the app&apos;s list. You can still add it; set its timing yourself.</p>
-          {actions({ crop: canonicalCrop(typed).slice(0, 40) })}
+          {lookup?.name === typed && lookup.state === "busy" ? (
+            <p className="quiet small" role="status">
+              “{query.trim()}” isn&apos;t in the app&apos;s list yet. Looking it up with Gemini (family, feeding, harvest time)…
+            </p>
+          ) : lookup?.name === typed && lookup.state === "error" ? (
+            <>
+              <p className="quiet small" role="status">{lookup.message}</p>
+              <p className="quiet small">You can still add it; its timing will be a guess until it has a profile.</p>
+              {actions({ crop: canonicalCrop(typed).slice(0, 40) })}
+            </>
+          ) : (
+            <p className="quiet small">
+              {typed.length < 3 ? "Keep typing…" : `“${query.trim()}” isn't in the app's list yet. Gemini will look it up in a moment.`}
+            </p>
+          )}
         </div>
       ) : (
         <p className="quiet small">Look up any plant to see if it suits this plot now, then add it. You can also drag a result onto the map.</p>

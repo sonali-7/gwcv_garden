@@ -9,6 +9,7 @@ import type {
   WorkSession,
   Bed,
   GardenLayout,
+  CropProfile,
 } from "./types";
 import { blankConversation } from "./types";
 
@@ -25,6 +26,9 @@ export interface Store {
   deleteBed(id: string): Promise<void>;
   getLayout(): Promise<GardenLayout>;
   saveLayout(layout: GardenLayout): Promise<void>;
+  /** Plants looked up with Gemini (crop-profiles.ts). */
+  listCropProfiles(): Promise<CropProfile[]>;
+  saveCropProfile(profile: CropProfile): Promise<void>;
   listPlantings(): Promise<Planting[]>;
   insertPlanting(planting: Planting): Promise<void>;
   updatePlanting(planting: Planting): Promise<void>;

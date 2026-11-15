@@ -108,6 +108,12 @@ export function createMongoStore(uri: string, dbName: string): ConnectedStore {
     async saveLayout(layout) {
       await rows(await database(), "gardenConfig").replaceOne({ _id: "layout" }, { _id: "layout", ...layout }, { upsert: true });
     },
+    async listCropProfiles() {
+      return docs(await database(), "cropProfiles");
+    },
+    async saveCropProfile(profile) {
+      await rows(await database(), "cropProfiles").replaceOne({ _id: profile.crop }, { ...profile, _id: profile.crop }, { upsert: true });
+    },
     async listPlantings() {
       return docs(await database(), "plantings");
     },
