@@ -14,7 +14,10 @@ function image(value: unknown) {
   return { mime: match[1], base64: match[2] };
 }
 
-/** Read the writing on a garden drawing. The browser has already found the boxes and numbered them on a copy. */
+/**
+ * Read the writing on a garden drawing. Usually the browser has already found the boxes and numbered them on a copy;
+ * if it found none, Gemini finds the beds too.
+ */
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   const original = image(body?.original);
@@ -23,7 +26,8 @@ export async function POST(request: Request) {
   const edges = Array.isArray(body?.edges)
     ? (body.edges as unknown[]).filter((e): e is string => typeof e === "string" && /^[A-Z]$/.test(e)).slice(0, 26)
     : [];
-  if (!original || !marked || !Number.isInteger(count) || count < 1 || count > 80) {
+  // With no boxes found (count 0), Gemini looks for the beds itself and needs only the drawing.
+  if (!original || !Number.isInteger(count) || count < 0 || count > 80 || (count > 0 && !marked)) {
     return json({ error: "Send the drawing and the marked-up copy." }, 400);
   }
   try {

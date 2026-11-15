@@ -186,11 +186,15 @@ export function SketchImport(props: {
     }
   }
 
-  /** Number the beds and letter the outline's sides on a copy, then ask Gemini to read both. */
+  /**
+   * Number the beds and letter the outline's sides on a copy, then ask Gemini to read both.
+   * If no boxes were found, send just the drawing and let Gemini find the beds.
+   */
   async function readLabels() {
-    if (!img || !detection || !detection.beds.length) return;
+    if (!img || !detection) return;
     setReading("busy");
     setError("");
+    const finding = detection.beds.length === 0;
     const marked = scaled(img, 1600);
     const ctx = marked.getContext("2d")!;
     const k = marked.width / detection.width;
@@ -239,8 +243,8 @@ export function SketchImport(props: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           original: scaled(img, 1600).toDataURL("image/jpeg", 0.85),
-          marked: marked.toDataURL("image/jpeg", 0.85),
-          count: rows.length,
+          marked: finding ? undefined : marked.toDataURL("image/jpeg", 0.85),
+          count: finding ? 0 : rows.length,
           edges: detection.edges.map((e) => e.label),
         }),
       });
@@ -260,6 +264,14 @@ export function SketchImport(props: {
 
   function applyLabels(labels: SketchLabels) {
     if (!detection) return;
+    // Gemini found the beds itself: measure them against the garden edge it saw, not the whole page.
+    if (!detection.beds.length && labels.garden && labels.missed.length) {
+      const [x0, y0, x1, y1] = labels.garden;
+      setDetection({
+        ...detection,
+        frame: { x: x0 * detection.width, y: y0 * detection.height, w: (x1 - x0) * detection.width, h: (y1 - y0) * detection.height },
+      });
+    }
     const extra: DetectedBed[] = labels.missed.map((m, i) => ({
       rect: {
         x: m.box[0] * detection.width,
@@ -312,7 +324,7 @@ export function SketchImport(props: {
 
   // Read labels automatically once beds are found in a new picture.
   useEffect(() => {
-    if (detection && detection.beds.length && reading === "idle") void readLabels();
+    if (detection && reading === "idle") void readLabels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detection]);
 
@@ -526,10 +538,14 @@ export function SketchImport(props: {
               {!detection
                 ? "Looking for beds…"
                 : detection.beds.length === 0
-                  ? "No beds found. Try the slider, or make sure each box is closed at the corners."
+                  ? reading === "busy"
+                    ? "No closed boxes found, so Gemini is looking for the beds…"
+                    : missed.length
+                      ? `Gemini found ${missed.length} bed${missed.length === 1 ? "" : "s"} (dashed). Their boxes are rough, so check their size and position.`
+                      : "No beds found. Try the slider, or make sure each box is closed at the corners."
                   : `Found ${groupCount} bed${groupCount === 1 ? "" : "s"}${detection.outline ? " and the garden's edge" : detection.frameFromBorder ? " inside the garden edge" : ""}.`}
-              {reading === "busy" ? " Reading the writing…" : null}
-              {missed.length ? ` ${missed.length} more found by reading the labels (dashed). Check their size and position.` : null}
+              {reading === "busy" && detection?.beds.length ? " Reading the writing…" : null}
+              {missed.length && detection?.beds.length ? ` ${missed.length} more found by reading the labels (dashed). Check their size and position.` : null}
               {reading === "done" ? (
                 <button type="button" className="texty small" onClick={() => void readLabels()}>
                   Read the writing again
