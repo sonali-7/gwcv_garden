@@ -47,9 +47,11 @@ export function CalendarView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
-  const [clock, setClock] = useState(() => Date.now());
+  // Client-only clock so SSR and the first client paint don't disagree on the now-line.
+  const [clock, setClock] = useState<number | null>(null);
 
   useEffect(() => {
+    setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -65,11 +67,13 @@ export function CalendarView({
   const placed = placeSlices(visible.flatMap((session) => slicesForSession(session, weekStart, timezone)));
   const hours = Array.from({ length: DAY_END - DAY_START }, (_, index) => DAY_START + index);
   const gridHeight = (DAY_END - DAY_START) * HOUR_PX;
-  const now = new Date(clock);
+  // Until the client clock mounts, use noon on `today` so event status classes hydrate cleanly.
+  const now = clock != null ? new Date(clock) : new Date(`${today}T12:00:00`);
+  const liveClock = clock != null;
   const nowParts = partsInZone(now, timezone);
   const nowDay = ymd(nowParts);
-  const showNow = days.includes(nowDay);
-  const nowTop = (nowParts.hour * 60 + nowParts.minute) / 60 * HOUR_PX;
+  const showNow = liveClock && days.includes(nowDay);
+  const nowTop = ((nowParts.hour * 60 + nowParts.minute) / 60) * HOUR_PX;
   const selected = sessions.find((session) => session.id === selectedId) ?? null;
 
   useLayoutEffect(() => {

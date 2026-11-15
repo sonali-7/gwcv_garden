@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { spriteFileKey } from "./pixel-sprites";
-import { buildTasks } from "./priority";
+import { reconcilePriorityTasks } from "./planner";
 import type { Store } from "./store";
 import { gardenTz, todayYmd } from "./time";
 import { toPublicPerson, type Bed, type GardenLayout, type Photo, type Planting, type PublicPerson, type Task, type WorkSession } from "./types";
@@ -36,6 +36,8 @@ async function customSprites(): Promise<Record<string, string>> {
 
 export async function loadGarden(store: Store, now = new Date()): Promise<GardenData> {
   const timeZone = gardenTz();
+  // Same reconcile as the calendar so map markers and the priority list share one source of truth.
+  const tasks = await reconcilePriorityTasks(store, now);
   const [sprites, layout, people, beds, plantings, sessions, photos] = await Promise.all([
     customSprites(),
     store.getLayout(),
@@ -54,7 +56,7 @@ export async function loadGarden(store: Store, now = new Date()): Promise<Garden
     plantings,
     sessions,
     photos,
-    tasks: buildTasks({ now, beds, plantings, sessions, timeZone }),
+    tasks,
     sprites,
   };
 }

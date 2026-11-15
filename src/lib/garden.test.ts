@@ -19,8 +19,17 @@ import {
 } from "./parse";
 import { isMultiAccept, matchLocation } from "./location";
 import { buildTasks } from "./priority";
+import {
+  ALREADY_CLAIMED_REPLY,
+  approveAndSendPlan,
+  matchClaimTask,
+  mergeTaskState,
+  nextWeekStartYmd,
+  proposeWeekPlan,
+  reconcilePriorityTasks,
+} from "./planner";
 import { buildSeed } from "./seed";
-import { DEFAULT_TZ, partsInZone, startOfWeekYmd, zonedToUtc } from "./time";
+import { addDays, DEFAULT_TZ, partsInZone, startOfWeekYmd, zonedToUtc } from "./time";
 import type { Bed, Planting, TextMemory } from "./types";
 import { LIMIT_NOTICE, photonReply } from "./photon";
 import { readPhotonInbound, verifyStandardWebhook } from "./webhook";
@@ -297,6 +306,150 @@ describe("priority tasks", () => {
     assert.equal(tasks[0].severity, "urgent");
     assert.equal(tasks[1].severity, "upcoming");
     assert.equal(tasks[2].bed_id, "bed-x");
+  });
+});
+
+describe("thin week planner", () => {
+  it("treats iMessage curly-apostrophe I'll take … as a claim, not a watering log", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    await approveAndSendPlan(store, NOW);
+    // U+2019 RIGHT SINGLE QUOTATION MARK — what iPhone often sends
+    const curly = "I\u2019ll take watering peas";
+    const parsed = parseMessage(curly);
+    assert.equal(parsed.kind, "claim");
+    if (parsed.kind === "claim") assert.match(parsed.hint, /watering peas/i);
+
+    const result = await handleIncoming(store, { phone: "+15555501002", text: curly, now: NOW });
+    assert.match(result.replies.join(" "), /You're on:/i);
+    assert.ok(!/What time did you start/i.test(result.replies.join(" ")));
+  });
+
+  it("targets the week after the current Sun–Sat week", () => {
+    // NOW is Saturday 2026-11-14 → this week starts Nov 8, next week Nov 15.
+    assert.equal(startOfWeekYmd(NOW, DEFAULT_TZ), "2026-11-08");
+    assert.equal(nextWeekStartYmd(NOW, DEFAULT_TZ), "2026-11-15");
+    // Even on Sunday, "next week" is still the following Sunday.
+    const sunday = zonedToUtc("2026-11-08", 12, 0, DEFAULT_TZ);
+    assert.equal(nextWeekStartYmd(sunday, DEFAULT_TZ), "2026-11-15");
+    assert.equal(nextWeekStartYmd(sunday, DEFAULT_TZ), addDays(startOfWeekYmd(sunday, DEFAULT_TZ), 7));
+  });
+
+  it("proposes from priority tasks and texts only people who already texted", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    const plan = await proposeWeekPlan(store, NOW);
+    assert.equal(plan.weekStart, "2026-11-15");
+    assert.match(plan.text, /Nov 15/);
+    assert.equal(plan.tasks[0].status, "proposed");
+    assert.match(plan.text, /Sweet potato needs watering/);
+    assert.ok(plan.recipients.length >= 2);
+
+    const sent = await approveAndSendPlan(store, NOW);
+    assert.equal(sent.tasks[0].status === "claimed" ? "claimed" : "approved", "approved");
+    assert.ok(sent.sent >= 2);
+    const emma = await store.getThread("+15555501001");
+    assert.ok(emma.some((message) => message.direction === "out" && /Garden plan/.test(message.text)));
+  });
+
+  it("keeps the first claim and anonymously blocks the second", async () => {
+    const store = createMemoryStore(buildSeed(NOW));
+    await approveAndSendPlan(store, NOW);
+
+    const first = await handleIncoming(store, {
+      phone: "+15555501001",
+      text: "I'll take watering",
+      now: NOW,
+    });
+    assert.match(first.replies.join(" "), /You're on: Sweet potato needs watering/);
+
+    const second = await handleIncoming(store, {
+      phone: "+15555501002",
+      text: "I'll take watering",
+      now: NOW,
+    });
+    assert.equal(second.replies.join(" "), ALREADY_CLAIMED_REPLY);
+    assert.ok(!/Emma|Sonali|Jeremy/i.test(second.replies.join(" ")));
+
+    const tasks = await store.listTasks();
+    const water = tasks.find((task) => task.type === "water");
+    assert.equal(water?.status, "claimed");
+    assert.equal(water?.assignee_id, "person-emma");
+  });
+
+  it("merges saved claims onto rebuilt rule tasks", () => {
+    const seed = buildSeed(NOW);
+    const computed = buildTasks({
+      now: NOW,
+      beds: seed.beds,
+      plantings: seed.plantings,
+      sessions: seed.sessions,
+      timeZone: DEFAULT_TZ,
+    });
+    const saved = computed.map((task, index) =>
+      index === 0
+        ? { ...task, status: "claimed" as const, assignee_id: "person-emma", source: "planner" as const }
+        : task,
+    );
+    const merged = mergeTaskState(computed, saved);
+    assert.equal(merged[0].status, "claimed");
+    assert.equal(merged[0].assignee_id, "person-emma");
+    assert.equal(matchClaimTask("watering", merged, seed.beds, seed.plantings).task?.id, merged[0].id);
+  });
+
+  it("on calendar open, drops tasks for archived/missing beds and rewrites the DB", async () => {
+    const seed = buildSeed(NOW);
+    const store = createMemoryStore({
+      ...seed,
+      beds: seed.beds.map((bed) => (bed.id === "bed-x" ? { ...bed, archived: true } : bed)),
+      tasks: [
+        ...seed.tasks,
+        {
+          id: "water:ghost-planting",
+          type: "water",
+          severity: "urgent",
+          title: "Ghost needs watering",
+          detail: "stale",
+          due_date: NOW.toISOString(),
+          planting_id: "ghost-planting",
+          bed_id: "missing-bed",
+          status: "open",
+          assignee_id: null,
+          source: "rule",
+          rationale: "stale",
+        },
+      ],
+      plantings: [
+        ...seed.plantings,
+        {
+          id: "ghost-planting",
+          bed_id: "missing-bed",
+          crop: "ghost",
+          planted_date: "2026-10-01",
+          expected_harvest_date: "2026-12-01",
+          removed_date: null,
+          season_year: 2026,
+          days_to_maturity: 60,
+          source_session_id: null,
+        },
+      ],
+    });
+
+    const before = buildTasks({
+      now: NOW,
+      beds: await store.listBeds(),
+      plantings: await store.listPlantings(),
+      sessions: await store.listSessions(),
+      timeZone: DEFAULT_TZ,
+    });
+    assert.ok(!before.some((task) => task.bed_id === "bed-x"));
+    assert.ok(!before.some((task) => task.planting_id === "ghost-planting"));
+
+    const tasks = await reconcilePriorityTasks(store, NOW);
+    assert.ok(!tasks.some((task) => task.id === "water:ghost-planting"));
+    assert.ok(!tasks.some((task) => task.bed_id === "bed-x"));
+    const saved = await store.listTasks();
+    assert.ok(!saved.some((task) => task.id === "water:ghost-planting"));
+    const ghost = (await store.listPlantings()).find((item) => item.id === "ghost-planting");
+    assert.equal(ghost?.removed_date, "2026-11-14");
   });
 });
 

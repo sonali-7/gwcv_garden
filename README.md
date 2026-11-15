@@ -1,8 +1,52 @@
-# Garden log
+# GWCV Garden
 
-The people side of the community garden app: a weekly calendar of who did the work, a priority list, and a text thread that writes both.
+A community garden operations app for groups that already plan on paper or Google Drawings, coordinate by text, and need a live picture of what’s in the ground — without asking volunteers to learn another heavy app.
 
-It also has a garden view at [/garden](http://localhost:3000/garden): the garden drawn to scale, what's in each bed, and rotation-aware ideas for what to plant next. The two views share the same records, so a planting someone texts in shows up on the map.
+## Product
+
+**GWCV Garden** turns everyday volunteer texts and a hand-drawn (or imported) bed layout into one shared system: a **calendar of who did what**, a **priority list of what needs attention**, and a **to-scale garden map** with plantings, rotation memory, and local seed links.
+
+Volunteers text naturally (“planted carrots in row 3 from 8–9”, “weeded for an hour”, “what needs watering?”). The text agent logs work sessions, updates plantings, answers short questions, and can take a photo. Organizers open the web app for the week view, the map, and planning ahead. The same records feed both sides, so a planting someone texts in shows up on the map, and harvesting clears the bed for the next crop.
+
+Built for a real community garden group (HackPrinceton client work): often non-technical users who prefer iMessage/SMS over installing software.
+
+## Problems it solves
+
+| Pain today | What the product does |
+| --- | --- |
+| **One static yearly drawing** can’t track replants, mid-season swaps, or which row is empty *now* | Live **Planting** history per bed (planted / expected harvest / removed), with a timeline to look back or plan ahead |
+| **Crop rotation** is tribal knowledge (“don’t put tomatoes where tomatoes were”) | Rotation-aware suggestions and planning checks by crop family, feeder type, and prior seasons |
+| **Volunteer hours and chores** live in scattered texts or memory | Natural-language **text log** → calendar blocks (color per person) + notes/photos |
+| **“What needs doing?”** is a hallway conversation | Deterministic **priority panel**: water, harvest windows, empty beds, weekly meeting |
+| **Buying seeds on Amazon** instead of local shops | Garden location + “find seeds nearby” style hooks from the planning view |
+| **Importing a paper / Drawing plan** means retyping every bed | **Import drawing**: detect bed boxes, read labels (Gemini when available), review, then sync layout without wiping planting history |
+| Apps that expect everyone to log in | **Text-first** (Photon iMessage/SMS + on-screen simulator); web is for organizers |
+
+Secondary but important: emergencies in text get a fixed “call 911” reply (not model-dependent); phones stay in the DB and are not exposed on public read APIs; outbound texts are rate-limited.
+
+## What’s in the app
+
+1. **Text agent** — Parse chores into work sessions and plantings; clarify AM/PM or row once when needed; undo / delete / cancel; memory for “also … at the same time”; standings like weekly meetings; Q&A for schedule and watering; claim open plan tasks by text.
+2. **Calendar** — Weekly Sun–Sat board, person colors, event detail (activity, beds/crops, notes, photos), week navigation matched to the garden timeline controls.
+3. **Priority list** — Rule-based tasks (not an LLM): watering urgency, harvest windows, fill empty beds, weekly meeting.
+4. **Thin week planner** — From the priority panel: **Plan next week** builds a proposal for the *following* Sun–Sat week (always the Sunday after this week’s Sunday, even if today is Sunday) from open priority tasks plus sessions already scheduled that week; **Approve & text** sends that plan only to people who have already texted the garden. Volunteers claim with “I’ll take watering”; a second claim gets an anonymous “someone already claimed that” reply (no broadcast).
+5. **Garden map** — Scaled layout, crops per bed, edit layout, suggestions, timeline scrubbing, seed-vendor orientation, Gemini bed ideas on demand.
+6. **Photo log** — Optional image on a text; captioned and linked to the session for the map/calendar.
+
+## Tech stack
+
+| Layer | Choice |
+| --- | --- |
+| App | **TypeScript**, **Next.js 15** (App Router), React 19 |
+| Data | **MongoDB Atlas** (official Node driver) when `MONGODB_URI` is set; otherwise local **`data/store.json`**. Collections: people, beds, plantings, workSessions, photos, tasks (+ layout). Photos on disk under `public/uploads` |
+| Text AI | **Google Gemini** (`GEMINI_API_KEY`, `src/lib/gemini.ts`) for structured parse, captions, drawing labels, bed ideas. Rules parser fallback with no key. Times/days in the volunteer’s words win over the model |
+| Messaging | Channel adapter: **Photon 2.0** webhooks (`/api/photon`, Standard Webhooks `whsec_`) + **local Texts simulator** in the UI |
+| Priority / rotation | Deterministic TypeScript rules (`priority.ts`, `recommend.ts`, crop guide JSON) — not the LLM |
+| Week planner | Thin deterministic flow in `planner.ts` + `POST /api/plan` (propose / approve). No deepagents on the hot path |
+| Drawing import | Client geometry detect (`sketch-detect.ts`) + optional Gemini handwriting (`sketch-labels.ts`) |
+| Hosting (demo) | Local `npm run dev`; public webhook via **cloudflared** quick tunnel to `/api/photon` |
+
+A heavier deepagents weekly assigner can still come later; this slice is propose → approve → claim.
 
 ## Run it
 
@@ -33,11 +77,12 @@ Try this in the phone:
 2. Text as Sonali: `from 8-9am I planted kale`, then `space x`. Space X leaves the priority list and a kale planting is created.
 3. Text as Jeremy: `weeded the carrot row for an hour`, then `10am`.
 4. Ask `what needs watering?` or `what's on the schedule this week?`
-5. `undo` removes that person's latest log.
-6. Choose **New**, text a chore, and give a name when asked. They show up on the calendar in their own color.
-7. Attach a photo. It is stored with the session and served at `GET /api/photos` for the garden map.
-8. Click Jeremy’s sweet-potato block. The session opens on the calendar.
-9. Text `schedule kumquats from 4-5 today`. It asks am or pm, then which row, and does not read the week back.
+5. In **Priority**, click **Plan next week**, review the preview, then **Approve & text**. Open Texts as Emma and Sonali — both should see the plan if they have already texted. As Emma: `I'll take watering`. As Sonali: `I'll take watering` → anonymous already-claimed reply.
+6. `undo` removes that person's latest log.
+7. Choose **New**, text a chore, and give a name when asked. They show up on the calendar in their own color.
+8. Attach a photo. It is stored with the session and served at `GET /api/photos` for the garden map.
+9. Click Jeremy’s sweet-potato block. The session opens on the calendar.
+10. Text `schedule kumquats from 4-5 today`. It asks am or pm, then which row, and does not read the week back.
 
 **Reset demo** restores the sample week.
 
@@ -96,7 +141,7 @@ Each incoming text gets one reply at most, with every line of the answer in that
 
 ## Not in this slice
 
-The garden map, plant recommendations, and the weekly planner that assigns volunteers are separate. Crop families are available at `/api/crop-families` for that planner. Nothing here texts a volunteer unless they texted first, or a Photon webhook is delivering their own message.
+A heavier deepagents assigner that picks who should do what is still separate; this app’s thin planner only lists needs and lets volunteers claim. Crop families stay at `/api/crop-families` for that later flow. Outbound plan texts only go to people who have already texted the garden (or whose Photon conversation is known).
 
 ## Garden view
 
