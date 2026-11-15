@@ -1,11 +1,16 @@
 "use client";
 
 import { useMemo } from "react";
+import { CAR_KG_PER_MILE } from "@/lib/carbon";
 import { compareYears, MIN_PLANTINGS } from "@/lib/sustainability";
 import type { Bed, Planting } from "@/lib/types";
 
 /** Below this, a percentage swings wildly (11 → 82 is "645% better"), so the change is shown in points instead. */
 const PERCENT_FROM = 25;
+
+function kg(n: number): string {
+  return n >= 10 ? String(Math.round(n)) : n.toFixed(1);
+}
 
 function shortDate(day: string): string {
   return new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
@@ -56,6 +61,18 @@ export function SustainabilityCard(props: { beds: Bed[]; plantings: Planting[]; 
           <p className="quiet small">{range}, both years</p>
         </div>
       </div>
+      <div className="eco-co2" aria-label="Estimated CO₂ saved">
+        <p>
+          <strong>≈ {kg(current.carbon.kg)} kg CO₂</strong> saved
+          {current.carbon.kg >= 1 ? <span className="quiet"> · about {Math.round(current.carbon.kg / CAR_KG_PER_MILE)} miles not driven</span> : null}
+        </p>
+        <p className="quiet small">
+          {current.carbon.harvests
+            ? `${kg(current.carbon.foodKg)} kg of food grown instead of bought${current.carbon.top.length ? `, mostly ${current.carbon.top.map((t) => t.crop).join(", ")}` : ""}.`
+            : "Counts once something reaches harvest."}{" "}
+          {previous.carbon.harvests ? `${previous.year}: ≈ ${kg(previous.carbon.kg)} kg.` : ""}
+        </p>
+      </div>
       {result.reasons.length ? (
         <ul className="eco-reasons">
           {result.reasons.slice(0, 2).map((reason) => (
@@ -82,7 +99,11 @@ export function SustainabilityCard(props: { beds: Bed[]; plantings: Planting[]; 
           repeat a family grown in that plot the year before. Healthy nitrogen (30%): plot area that isn&apos;t low on
           nitrogen. A plot counts from the year it was first planted, and rotation only counts plots with a record from the
           year before. When last year scored under {PERCENT_FROM}, the change is shown in points,
-          since a percentage of a small number exaggerates it. {change === null ? `It compares once ${previous.year} has at least ${MIN_PLANTINGS} plantings.` : ""}
+          since a percentage of a small number exaggerates it. CO₂ is a rough estimate, kept separate from the
+          score: each crop that reached harvest counts its share of the plot&apos;s area × a typical home-garden yield per
+          square foot × what the same food costs in CO₂ from a store (Poore &amp; Nemecek 2018), plus fertilizer that legumes
+          made unnecessary ({kg(current.carbon.fertilizerKg)} kg this year). Miles use an average car (400 g CO₂ a mile).{" "}
+          {change === null ? `It compares once ${previous.year} has at least ${MIN_PLANTINGS} plantings.` : ""}
         </p>
       </details>
     </section>

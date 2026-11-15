@@ -27,6 +27,13 @@ export function activePlantings(plantings: Planting[], onYmd: string): Planting[
 /** When looking ahead, a crop nobody has marked removed is assumed cleared this many days after its expected harvest. */
 export const CLEAR_AFTER_HARVEST_DAYS = 14;
 
+/** Last day a planting covered the soil: the day before it was removed, two weeks after harvest for annuals, never for perennials. */
+export function coverEndsOn(planting: Planting): string {
+  if (planting.removed_date) return addDays(planting.removed_date, -1);
+  if (isPerennial(planting.crop)) return "9999-12-31";
+  return addDays(planting.expected_harvest_date, CLEAR_AFTER_HARVEST_DAYS);
+}
+
 /**
  * Whether a planting is in the ground on `day`, as the garden timeline shows it.
  * Up to today this is the record as logged. After today, crops with no removal date

@@ -1,7 +1,8 @@
+import { carbonSaved, type CarbonEstimate } from "./carbon";
 import { familyOf } from "./crops";
 import { nitrogenBalance } from "./nitrogen";
 import { isPerennial } from "./perennials";
-import { CLEAR_AFTER_HARVEST_DAYS } from "./plantings";
+import { coverEndsOn } from "./plantings";
 import { addDays } from "./time";
 import type { Bed, Planting } from "./types";
 
@@ -35,6 +36,8 @@ export type YearScore = {
   measures: Measure[];
   /** Plantings that grew during the stretch: too few and the comparison isn't meaningful. */
   plantings: number;
+  /** Rough CO₂ saved over the stretch, from plot areas (see carbon.ts). Shown beside the score, not part of it. */
+  carbon: CarbonEstimate;
 };
 
 export type Comparison = {
@@ -58,12 +61,7 @@ function real(planting: Planting): boolean {
   return planting.status !== "planned";
 }
 
-/** Last day a planting covered the soil: removed, or two weeks after harvest for annuals, never for perennials. */
-function lastDay(planting: Planting): string {
-  if (planting.removed_date) return addDays(planting.removed_date, -1);
-  if (isPerennial(planting.crop)) return "9999-12-31";
-  return addDays(planting.expected_harvest_date, CLEAR_AFTER_HARVEST_DAYS);
-}
+const lastDay = coverEndsOn;
 
 function area(bed: Bed, fallback: number): number {
   return bed.geometry ? Math.max(0.25, bed.geometry.w * bed.geometry.h) : fallback;
@@ -158,7 +156,8 @@ export function yearScore(beds: Bed[], plantings: Planting[], year: number, endO
     },
   ];
   const growing = mine.filter((p) => p.planted_date <= to && lastDay(p) >= from).length;
-  return { year, from, to, score: combine(measures), measures, plantings: growing };
+  const carbon = carbonSaved(beds, mine, from, to, (bed) => area(bed, fallback));
+  return { year, from, to, score: combine(measures), measures, plantings: growing, carbon };
 }
 
 /** Weighted average over the measures that have a score, re-weighted so they add up. */
